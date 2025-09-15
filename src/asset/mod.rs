@@ -4,7 +4,7 @@ use std::{
     io::{self, Cursor, Read, Write},
 };
 
-use crate::{DataView, VirtualResource, VirtualResourceError, game::AssetType};
+use crate::{BNLAsset, DataView, VirtualResource, VirtualResourceError, game::AssetType};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -22,9 +22,9 @@ pub struct RawAsset {
 
 #[derive(Debug, Clone)]
 pub struct DataViewList {
-    size: u32,
-    num_views: u32,
-    views: Vec<DataView>,
+    pub(crate) size: u32,
+    pub(crate) num_views: u32,
+    pub(crate) views: Vec<DataView>,
 }
 
 impl DataViewList {
@@ -105,9 +105,9 @@ impl DataViewList {
     pub fn write_bytes(
         &self,
         bytes: &[u8],
-        resource: &mut Vec<u8>,
+        resource: &mut [u8],
     ) -> Result<(), VirtualResourceError> {
-        let dvl_size = self.len();
+        let dvl_size = self.bytes_required();
         let write_size = bytes.len();
 
         if dvl_size != write_size {
@@ -153,7 +153,7 @@ impl DataViewList {
         Ok(())
     }
 
-    pub fn len(&self) -> usize {
+    pub fn bytes_required(&self) -> usize {
         self.views().iter().map(|view| view.size as usize).sum()
     }
 
@@ -174,6 +174,28 @@ impl DataViewList {
             .iter()
             .zip(&other.views)
             .any(|(v1, v2)| v1.overlaps(v2))
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let num_views = self.views.len();
+
+        let size = 8 + 16 * num_views;
+
+        let mut v = vec![0x00; size];
+
+        let mut cur = Cursor::new(&mut v[..]);
+
+        cur.write_u32::<LittleEndian>(size as u32).unwrap();
+        cur.write_u32::<LittleEndian>(num_views as u32).unwrap();
+
+        self.views.iter().for_each(|view| {
+            cur.write_u32::<LittleEndian>(view.offset)
+                .expect("View offset should've been accounted for.");
+            cur.write_u32::<LittleEndian>(view.size)
+                .expect("View size should've been accounted for.");
+        });
+
+        v
     }
 }
 
@@ -196,7 +218,10 @@ impl Display for AssetParseError {
 
 impl From<std::io::Error> for AssetParseError {
     fn from(value: std::io::Error) -> Self {
-        AssetParseError::InvalidDataViews("IO error occurred when parsing Asset.".to_string())
+        AssetParseError::InvalidDataViews(format!(
+            "IO error occurred when parsing Asset.\n{}",
+            value
+        ))
     }
 }
 
@@ -248,20 +273,23 @@ pub trait AssetDescriptor: Sized + Clone {
 pub trait Asset: Sized {
     type Descriptor: AssetDescriptor;
 
-    fn descriptor(&self) -> &Self::Descriptor;
     fn new(
-        name: &str,
+        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError>;
 
-    fn resource_data(&self) -> Vec<u8>;
+    fn description(&self) -> &AssetDescription;
+    fn descriptor(&self) -> &Self::Descriptor;
 
     fn asset_type() -> AssetType {
         Self::Descriptor::asset_type()
     }
+    fn name(&self) -> &str {
+        self.description().name()
+    }
 
-    fn name(&self) -> &str;
+    fn as_bnl_asset(&self) -> BNLAsset;
 }
 
 pub type AssetName = [u8; 128];

@@ -5,9 +5,9 @@ use std::io::{Cursor, Read, Write};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::{
-    VirtualResource,
+    BNLAsset, VirtualResource,
     asset::{
-        Asset, AssetDescriptor, AssetParseError,
+        Asset, AssetDescription, AssetDescriptor, AssetParseError,
         script::ops::{KnownOpcode, ScriptOpcode, ScriptOperationShape},
     },
     game::AssetType,
@@ -37,9 +37,9 @@ pub enum ScriptError {
 
 #[derive(Debug)]
 pub struct Script {
-    name: String,
+    description: AssetDescription,
     descriptor: ScriptDescriptor,
-    data: Vec<u8>,
+    data: Vec<Vec<u8>>,
 }
 
 impl Script {
@@ -195,14 +195,18 @@ impl Asset for Script {
     type Descriptor = ScriptDescriptor;
 
     fn new(
-        name: &str,
+        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
         Ok(Script {
-            name: name.to_string(),
+            description: description.clone(),
             descriptor: descriptor.clone(),
-            data: virtual_res.get_all_bytes(),
+            data: virtual_res
+                .slices
+                .iter()
+                .map(|slice| slice.to_vec())
+                .collect(),
         })
     }
 
@@ -210,11 +214,21 @@ impl Asset for Script {
         &self.descriptor
     }
 
-    fn name(&self) -> &str {
-        &self.name
+    fn description(&self) -> &AssetDescription {
+        &self.description
     }
 
-    fn resource_data(&self) -> Vec<u8> {
-        self.data.clone()
+    fn as_bnl_asset(&self) -> BNLAsset {
+        BNLAsset {
+            description: self.description.clone(),
+            descriptor_bytes: self
+                .descriptor
+                .to_bytes()
+                .expect("Unable to get descriptor from script."),
+            resource_chunks: match self.data.len() {
+                0 => None,
+                _ => Some(self.data.clone()),
+            },
+        }
     }
 }

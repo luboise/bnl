@@ -10,16 +10,13 @@ use std::{
     cmp,
     error::Error,
     fmt::Display,
-    io::{Cursor, Read, Seek, SeekFrom},
+    io::{Cursor, Read, Seek, SeekFrom, Write},
     ops::Range,
 };
 
-use crate::{
-    asset::{
-        ASSET_DESCRIPTION_SIZE, Asset, AssetDescription, AssetDescriptor, AssetError, AssetName,
-        AssetParseError, DataViewList, RawAsset,
-    },
-    game::AssetType,
+use crate::asset::{
+    ASSET_DESCRIPTION_SIZE, Asset, AssetDescription, AssetDescriptor, AssetError, AssetParseError,
+    DataViewList, RawAsset,
 };
 
 pub mod game;
@@ -134,6 +131,19 @@ impl BNLHeader {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct BNLAsset {
+    description: AssetDescription,
+    descriptor_bytes: Vec<u8>,
+    resource_chunks: Option<Vec<Vec<u8>>>,
+}
+
+#[derive(Debug, Default)]
+pub struct UnpackedBNLFile {
+    header: BNLHeader,
+    assets: Vec<BNLAsset>,
+}
+
 #[derive(Debug, Default)]
 pub struct BNLFile {
     header: BNLHeader,
@@ -144,6 +154,390 @@ pub struct BNLFile {
     descriptor_bytes: Vec<u8>,
 
     asset_descriptions: Vec<AssetDescription>,
+}
+
+impl UnpackedBNLFile {
+    /**
+    Parses a BNL file in memory, loading embedded [`AssetDescription`] data.
+
+    # Errors
+    - [`BNLError::DecompressionFailure`] when the zlib compression section of the file could not be parsed
+    - [`BNLError::DataReadError`] when any other part of the file could not be parsed
+
+    # Examples
+    ```
+    use bnl::BNLFile;
+    use std::path::PathBuf;
+
+    let path = PathBuf::new("./my_bnl.bnl");
+    let bytes = fs::read(&path).expect("Unable to read BNL.");
+
+    let bnl = BNLFile::from_bytes(&bytes).expect("Unable to parse BNL.");
+    ```
+    */
+    pub fn from_bytes(bnl_bytes: &[u8]) -> Result<UnpackedBNLFile, BNLError> {
+        let mut bytes = bnl_bytes[..40].to_vec();
+
+        let mut cur = Cursor::new(bnl_bytes);
+
+        let mut header = BNLHeader {
+            file_count: cur.read_u16::<LittleEndian>()?,
+            flags: cur.read_u8()?,
+            ..Default::default()
+        };
+
+        cur.read_exact(&mut header.unknown_2)?;
+
+        header.asset_desc_loc = DataView::from_cursor(&mut cur)?;
+        header.buffer_views_loc = DataView::from_cursor(&mut cur)?;
+        header.buffer_loc = DataView::from_cursor(&mut cur)?;
+        header.descriptor_loc = DataView::from_cursor(&mut cur)?;
+
+        let decompressed_bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&bnl_bytes[40..])?;
+        bytes.extend_from_slice(&decompressed_bytes);
+
+        // Need to to this so that bytes.extent_from_slice doesn't cause an immutable borrow error
+        cur = Cursor::new(&bytes);
+
+        let mut new_bnl = UnpackedBNLFile {
+            header,
+            ..Default::default()
+        };
+
+        let num_descriptions = new_bnl.header.asset_desc_loc.size as usize / ASSET_DESCRIPTION_SIZE;
+
+        let mut asset_desc_bytes = Vec::new();
+        let mut buffer_views_bytes = Vec::new();
+        let mut buffer_bytes = Vec::new();
+        let mut descriptor_bytes = Vec::new();
+
+        let loc = &new_bnl.header.asset_desc_loc;
+        cur.seek(SeekFrom::Start(loc.offset.into()))?;
+        asset_desc_bytes.resize(loc.size as usize, 0);
+        cur.read_exact(&mut asset_desc_bytes)?;
+
+        let loc = &new_bnl.header.buffer_views_loc;
+        cur.seek(SeekFrom::Start(loc.offset.into()))?;
+        buffer_views_bytes.resize(loc.size as usize, 0);
+        cur.read_exact(&mut buffer_views_bytes)?;
+
+        let loc = &new_bnl.header.buffer_loc;
+        cur.seek(SeekFrom::Start(loc.offset.into()))?;
+        buffer_bytes.resize(loc.size as usize, 0);
+        cur.read_exact(&mut buffer_bytes)?;
+
+        let loc = &new_bnl.header.descriptor_loc;
+        cur.seek(SeekFrom::Start(loc.offset.into()))?;
+        descriptor_bytes.resize(loc.size as usize, 0);
+        cur.read_exact(&mut descriptor_bytes)?;
+
+        cur.seek(SeekFrom::Start(new_bnl.header.asset_desc_loc.offset as u64))?;
+
+        for i in 0..num_descriptions {
+            let mut bytes = [0x00; ASSET_DESCRIPTION_SIZE];
+            cur.read_exact(&mut bytes)?;
+
+            let mut description = AssetDescription::from_bytes(&bytes)?;
+            description.asset_desc_index = i;
+
+            let desc_start: usize = description.descriptor_ptr as usize;
+            let desc_end: usize = desc_start + description.descriptor_size as usize;
+            let desc_bytes = descriptor_bytes[desc_start..desc_end].to_vec();
+
+            let resource_chunks: Option<Vec<Vec<u8>>> = match description.resource_size {
+                0 => None,
+                _size => Some(
+                    DataViewList::from_bytes(
+                        &buffer_views_bytes[description.dataview_list_ptr as usize..],
+                    )
+                    .map_err(|_| {
+                        BNLError::DataReadError("Unable to read BufferViews.".to_string())
+                    })?
+                    .slices(&buffer_bytes)?
+                    .iter()
+                    .map(|slice| slice.to_vec())
+                    .collect(),
+                ),
+            };
+
+            // TODO: Resize this then push into it
+            new_bnl.assets.push(BNLAsset {
+                description,
+                descriptor_bytes: desc_bytes,
+                resource_chunks,
+            });
+        }
+
+        Ok(new_bnl)
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut asset_descs_section: Vec<u8> =
+            vec![0x00; ASSET_DESCRIPTION_SIZE * self.assets.len()];
+        let mut buffer_views_section: Vec<u8> = vec![];
+        let mut buffer_section: Vec<u8> = vec![];
+        let mut descriptors_section: Vec<u8> = vec![];
+
+        for asset in &self.assets {
+            let mut asset_desc = asset.description.clone();
+
+            if let Some(chunks) = &asset.resource_chunks {
+                let num_chunks = chunks.len();
+
+                let dvl = DataViewList {
+                    size: (8 + 16 * num_chunks) as u32,
+                    num_views: num_chunks as u32,
+                    views: chunks
+                        .iter()
+                        .map(|chunk| {
+                            let offset = buffer_section.len();
+                            buffer_section.write_all(chunk);
+
+                            DataView {
+                                offset: offset as u32,
+                                size: chunk.len() as u32,
+                            }
+                        })
+                        .collect(),
+                };
+
+                let dvl_bytes = dvl.to_bytes();
+
+                // Write buffer view information into asset desc
+                asset_desc.dataview_list_ptr = buffer_views_section.len() as u32;
+                asset_desc.resource_size = dvl.bytes_required() as u32;
+                buffer_views_section.write_all(&dvl_bytes);
+            }
+
+            asset_desc.descriptor_ptr = descriptors_section.len() as u32;
+            asset_desc.descriptor_size = asset.descriptor_bytes.len() as u32;
+            descriptors_section.extend_from_slice(&asset.descriptor_bytes);
+
+            asset_descs_section.extend_from_slice(&asset_desc.to_bytes());
+        }
+
+        let mut decompressed_bytes = Vec::new();
+
+        decompressed_bytes.extend_from_slice(&asset_descs_section);
+        decompressed_bytes.extend_from_slice(&buffer_views_section);
+        decompressed_bytes.extend_from_slice(&buffer_section);
+        decompressed_bytes.extend_from_slice(&descriptors_section);
+
+        let compressed_bytes = miniz_oxide::deflate::compress_to_vec_zlib(&decompressed_bytes, 1);
+
+        let mut bytes = vec![0; compressed_bytes.len() + 40];
+
+        bytes[0..40].copy_from_slice(&self.header.to_bytes());
+        bytes[40..].copy_from_slice(&compressed_bytes);
+
+        bytes
+    }
+
+    /// Retrieves an asset by name and type, creating it from the bytes of the BNL file.
+    ///
+    /// # Errors
+    /// - [`AssetError::NotFound`] when the given name can't be found
+    /// - [`AssetError::TypeMismatch`] when the asset is found, but doesn't match the requested type
+    /// - [`AssetError::ParseError`] when the asset is found, the type matches but an error occurs while parsing the asset
+    ///
+    /// # Examples
+    /// ```
+    /// use bnl::BNLFile;
+    /// use bnl::asset::Texture;
+    ///
+    /// let bnl_file = BNLFile::from_bytes(...);
+    /// let tex = bnl_file.get_asset::<Texture>("aid_texture_mytexture_a_b")
+    ///                   .expect("Unable to get texture.");
+    /// ```
+    pub fn get_asset<A: Asset>(&self, name: &str) -> Result<A, AssetError> {
+        for asset in &self.assets {
+            let asset_desc = &asset.description;
+
+            if asset_desc.name() == name {
+                if asset_desc.asset_type() != A::asset_type() {
+                    return Err(AssetError::TypeMismatch);
+                }
+
+                let descriptor = A::Descriptor::from_bytes(&asset.descriptor_bytes)?;
+
+                let slices: Vec<&[u8]> = match &asset.resource_chunks {
+                    Some(slices) => slices.iter().map(|slice| slice.as_ref()).collect(),
+                    None => vec![],
+                };
+
+                let vr = VirtualResource::from_slices(&slices);
+
+                let asset = A::new(asset_desc, &descriptor, &vr)?;
+
+                return Ok(asset);
+            }
+        }
+
+        Err(AssetError::NotFound)
+    }
+
+    /// Returns all assets of a given type from this [`BNLFile`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use bnl::BNLFile;
+    /// use bnl::asset::Texture;
+    ///
+    /// let bnl_file = BNLFile::from_bytes(...);
+    /// let textures = bnl_file.get_assets::<Texture>();
+    ///
+    /// // Dump all of the textures here
+    /// ```
+    pub fn get_assets<A: Asset>(&self) -> Vec<A> {
+        let mut assets = Vec::new();
+
+        for asset in &self.assets {
+            let asset_desc = &asset.description;
+
+            if asset_desc.asset_type() != A::asset_type() {
+                continue;
+            }
+
+            if let Ok(descriptor) = A::Descriptor::from_bytes(&asset.descriptor_bytes) {
+                let slices: Vec<&[u8]> = match &asset.resource_chunks {
+                    Some(slices) => slices.iter().map(|slice| slice.as_ref()).collect(),
+                    None => vec![],
+                };
+
+                let vr = VirtualResource::from_slices(&slices);
+
+                if let Ok(asset) = A::new(asset_desc, &descriptor, &vr) {
+                    assets.push(asset);
+                }
+            }
+        }
+
+        assets
+    }
+
+    /// Retrieves a [`RawAsset`] by name, or None if it can't be found.
+    ///
+    /// # Examples
+    /// ```
+    /// use bnl::BNLFile;
+    /// use bnl::asset::Texture;
+    ///
+    /// let bnl_file = BNLFile::from_bytes(...);
+    /// let raw_asset = bnl_file.get_raw_asset().expect("Unable to extract asset.");
+    ///
+    /// // Dump the data from the RawAsset
+    /// std::fs::write("./descriptor", &raw_asset.descriptor_bytes).expect("Unable to write
+    /// descriptor.");
+    /// raw_asset.data_slices.iter().enumerate().for_each(|(i, slice)| {
+    ///     std::fs::write(format!("./resource{}", i), &slice).expect("Unable to write resource.");
+    /// });
+    /// ```
+    pub fn get_raw_asset(&self, name: &str) -> Option<&BNLAsset> {
+        for asset in &self.assets {
+            if asset.description.name() == name {
+                return Some(asset);
+            }
+        }
+
+        None
+    }
+
+    /*
+    pub fn get_overlaps(&self) -> Result<Vec<Range<usize>>, BNLError> {
+        let mut dvls = Vec::with_capacity(self.asset_descriptions().len());
+
+        self.asset_descriptions()
+            .iter()
+            .filter(|asset_desc| asset_desc.dataview_list_ptr != 0)
+            .map(|asset_desc| {
+                DataViewList::from_bytes(
+                    &self.buffer_views_bytes[asset_desc.dataview_list_ptr as usize..],
+                )
+            });
+
+        for asset_desc in self.asset_descriptions() {
+            if asset_desc.dataview_list_ptr != 0 {
+                dvls.push(
+                    DataViewList::from_bytes(
+                        &self.buffer_views_bytes[asset_desc.dataview_list_ptr as usize..],
+                    )
+                    .map_err(|_| {
+                        BNLError::DataReadError(format!(
+                            "Unable to read Data View List for asset {}",
+                            asset_desc.name()
+                        ))
+                    })?,
+                );
+            }
+        }
+
+        for pair in dvls.iter().zip(&dvls) {
+            if std::ptr::eq(pair.0, pair.1) {
+                continue;
+            }
+        }
+
+        Ok(vec![])
+    }
+    */
+
+    /// Retrieves all [`RawAsset`] entries.
+    ///
+    /// # Examples
+    /// ```
+    /// use bnl::BNLFile;
+    /// use bnl::asset::Texture;
+    ///
+    /// let bnl_file = BNLFile::from_bytes(...);
+    /// let raw_assets = bnl_file.get_raw_assets().expect("Unable to extract.");
+    ///
+    /// // Dump the data from the RawAsset
+    ///
+    /// for raw_asset in raw_assets {
+    ///     std::fs::write("./descriptor", &raw_asset.descriptor_bytes)
+    ///                         .expect("Unable to write descriptor.");
+    ///
+    ///     raw_asset.data_slices.iter().enumerate().for_each(|(i, slice)| {
+    ///         std::fs::write(format!("./resource{}", i), &slice)
+    ///                         .expect("Unable to write resource.");;
+    ///     });
+    /// }
+    /// ```
+    pub fn get_raw_assets(&self) -> &Vec<BNLAsset> {
+        &self.assets
+    }
+
+    pub fn update_asset(&mut self, name: &str, bnl_asset: &BNLAsset) -> Result<(), AssetError> {
+        for asset in &mut self.assets {
+            if asset.description.name() == name {
+                *asset = bnl_asset.clone();
+
+                return Ok(());
+            }
+        }
+
+        Err(AssetError::NotFound)
+    }
+
+    pub fn get_assets_occupying_descriptor_range(
+        &self,
+        range: Range<usize>,
+    ) -> Vec<&AssetDescription> {
+        self.assets
+            .iter()
+            .map(|asset| &asset.description)
+            .filter(|asset_desc| {
+                let start1 = range.start;
+                let end1 = range.end;
+
+                let start2 = asset_desc.descriptor_ptr as usize;
+                let end2 = start2 + asset_desc.descriptor_size as usize;
+
+                start1 < end2 && start2 < end1
+            })
+            .collect()
+    }
 }
 
 impl BNLFile {
@@ -295,7 +689,7 @@ impl BNLFile {
                         )))
                     })?;
 
-                let asset = A::new(asset_desc.name(), &descriptor, &virtual_res)?;
+                let asset = A::new(asset_desc, &descriptor, &virtual_res)?;
 
                 return Ok(asset);
             }
@@ -354,7 +748,7 @@ impl BNLFile {
                 }
             };
 
-            match A::new(asset_desc.name(), &descriptor, &virtual_res) {
+            match A::new(asset_desc, &descriptor, &virtual_res) {
                 Ok(a) => assets.push(a),
                 Err(e) => eprintln!(
                     "Failed to load asset \"{}\"\n    Error: {}",
@@ -539,6 +933,7 @@ impl BNLFile {
         assets
     }
 
+    /*
     pub fn update_asset<A: Asset>(&mut self, name: &str, asset: &A) -> Result<(), AssetError> {
         for asset_desc in &self.asset_descriptions {
             if asset_desc.name() == name {
@@ -563,6 +958,7 @@ impl BNLFile {
 
         Err(AssetError::NotFound)
     }
+    */
 
     pub fn update_asset_from_descriptor<AD: AssetDescriptor>(
         &mut self,
@@ -701,7 +1097,7 @@ pub(crate) struct VirtualResource<'a> {
 }
 
 #[derive(Debug)]
-enum VirtualResourceError {
+pub enum VirtualResourceError {
     OffsetOutOfBounds,
     SizeOutOfBounds,
 }
@@ -819,6 +1215,10 @@ where {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    pub(crate) fn slices(&self) -> &[&[u8]] {
+        &self.slices
     }
 }
 
