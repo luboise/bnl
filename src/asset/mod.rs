@@ -5,10 +5,9 @@ use std::{
 };
 
 use crate::{
-    DataView, VirtualResource, VirtualResourceError, asset::model::sub_main::SubresourceError,
-    game::AssetType,
+    BNLAsset, DataView, VirtualResource, VirtualResourceError,
+    asset::model::sub_main::SubresourceError, game::AssetType,
 };
-use crate::{BNLAsset, DataView, VirtualResource, VirtualResourceError, game::AssetType};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -234,11 +233,6 @@ impl From<std::io::Error> for AssetParseError {
 impl From<SubresourceError> for AssetParseError {
     fn from(_: SubresourceError) -> Self {
         Self::ErrorParsingDescriptor
-    fn from(value: std::io::Error) -> Self {
-        AssetParseError::InvalidDataViews(format!(
-            "IO error occurred when parsing Asset.\n{}",
-            value
-        ))
     }
 }
 

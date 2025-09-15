@@ -7,11 +7,9 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::{
     BNLAsset, VirtualResource,
     asset::{
-        Asset, AssetDescriptor, AssetParseError,
+        Asset, AssetDescription, AssetDescriptor, AssetParseError,
         param::{HasParams, Param, ParamsShape},
         script::ops::{KnownOpcode, ScriptOpcode},
-        Asset, AssetDescription, AssetDescriptor, AssetParseError,
-        script::ops::{KnownOpcode, ScriptOpcode, ScriptOperationShape},
     },
     game::AssetType,
 };

@@ -11,11 +11,10 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use crate::{
     VirtualResource,
     asset::{
-        Asset, AssetDescriptor, AssetParseError,
-        model::sub_main::{Mesh, MeshDescriptor},
-        texture::{Texture, TextureDescriptor},
         Asset, AssetDescription, AssetDescriptor, AssetParseError,
-        texture::{TextureData, TextureDescriptor},
+        model::sub_main::{Mesh, MeshDescriptor},
+        texture::TextureData,
+        texture::{Texture, TextureDescriptor},
     },
     game::AssetType,
 };
@@ -25,7 +24,6 @@ pub struct Model {
     description: AssetDescription,
     descriptor: ModelDescriptor,
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
-    textures: Vec<Texture>,
     meshes: Vec<Mesh>,
     textures: Vec<TextureData>,
 }

@@ -1,6 +1,7 @@
 use std::{
     io::{self, Cursor, Read, Seek, SeekFrom},
     iter::{self},
+    task::Wake,
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -55,8 +56,11 @@ impl From<KnownNdType> for String {
     }
 }
 
+const NDHEADER_SIZE: usize = 32;
+
 #[derive(Debug, Clone)]
 pub struct NdHeader {
+    name_ptr: u32,
     nd_type: NdType,
     unknown_u16: u16, // Possibly index
     unknown_ptr1: u32,
@@ -96,7 +100,12 @@ impl NdHeader {
         let mut name = String::new();
         name_cur.read_to_string(&mut name)?;
 
-        let nd_type: NdType = name.into();
+        // TODO: Move this somewhere else
+        let nd_type: NdType = match name.as_ref() {
+            "ndVertexBuffer" => NdType::Known(KnownNdType::VertexBuffer),
+            "ndPushBuffer" => NdType::Known(KnownNdType::PushBuffer),
+            _ => NdType::Unknown(name),
+        };
 
         let first_child = match first_child_ptr {
             0 => None,
@@ -109,6 +118,7 @@ impl NdHeader {
         };
 
         Ok(NdHeader {
+            name_ptr,
             nd_type,
             unknown_u16,
             unknown_ptr1,
@@ -143,7 +153,34 @@ impl Nd {
     pub fn new(slice: &[u8], start_offset: usize) -> Result<Nd, NdError> {
         let mut cur = Cursor::new(slice);
 
-        cur.seek(SeekFrom::Start(start_offset as u64))?;
+        let header = NdHeader::from_bytes(slice)?;
+
+        cur.seek(SeekFrom::Start(32 + start_offset as u64))?;
+
+        if let KnownUnknown::Known(nd_type) = &header.nd_type {
+            match nd_type {
+                KnownNdType::VertexBuffer => {
+                    let resource_views_ptr = cur.read_u32::<LittleEndian>()?;
+                    let num_resource_views = cur.read_u32::<LittleEndian>()?;
+
+                    let mut resource_views = Vec::with_capacity(num_resource_views as usize);
+
+                    for _ in 0..num_resource_views {
+                        resource_views.push(VertexBufferResourceView::from_cursor(&mut cur));
+                    }
+
+                    return Ok(Nd::VertexBuffer(NdVertexBuffer {
+                        header,
+                        resource_views_ptr,
+                        num_resource_views,
+                        resource_views: vec![],
+                    }));
+                }
+                KnownNdType::PushBuffer => todo!(),
+            }
+        } else {
+            Ok(Nd::Other())
+        }
     }
 }
 
@@ -170,6 +207,20 @@ pub struct VertexBufferResourceView {
     // 0x16
     view_start: u32,
     view_size: u32,
+}
+
+impl VertexBufferResourceView {
+    pub fn from_cursor(cur: &mut Cursor<&[u8]>) -> Result<Self, std::io::Error> {
+        Ok(VertexBufferResourceView {
+            stride: cur.read_u8()?,
+            res_type: cur.read_u8()?,
+            unknown_u16: cur.read_u16::<LittleEndian>()?,
+            unknown_u32_1: cur.read_u32::<LittleEndian>()?,
+            unknown_u32_2: cur.read_u32::<LittleEndian>()?,
+            view_start: cur.read_u32::<LittleEndian>()?,
+            view_size: cur.read_u32::<LittleEndian>()?,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]

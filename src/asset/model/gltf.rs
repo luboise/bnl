@@ -1,13 +1,13 @@
 use mod3d_gltf::{Gltf, GltfScene};
 
 use crate::asset::{
-    Asset,
+    Asset, AssetDescription,
     model::{ModelDescriptor, nd::Nd},
 };
 
 #[derive(Debug)]
 pub struct GLTFModel {
-    name: String,
+    description: AssetDescription,
     descriptor: ModelDescriptor,
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
     gltf: Gltf,
@@ -21,7 +21,7 @@ impl Asset for GLTFModel {
     }
 
     fn new(
-        name: &str,
+        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &crate::VirtualResource,
     ) -> Result<Self, crate::asset::AssetParseError> {
@@ -39,23 +39,23 @@ impl Asset for GLTFModel {
             }
 
             gltf.add_scene(GltfScene {
-                name: format!("{}_{}", name, i + 1),
+                name: format!("{}_{}", description.name(), i + 1),
                 nodes,
             });
         }
 
         Ok(Self {
-            name: name.to_string(),
+            description: description.clone(),
             descriptor: descriptor.clone(),
             gltf,
         })
     }
 
-    fn resource_data(&self) -> Vec<u8> {
-        todo!()
+    fn description(&self) -> &AssetDescription {
+        &self.description
     }
 
-    fn name(&self) -> &str {
+    fn as_bnl_asset(&self) -> crate::BNLAsset {
         todo!()
     }
 }
