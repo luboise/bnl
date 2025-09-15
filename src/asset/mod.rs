@@ -179,7 +179,7 @@ impl DataViewList {
     pub fn to_bytes(&self) -> Vec<u8> {
         let num_views = self.views.len();
 
-        let size = 8 + 16 * num_views;
+        let size = 8 + 8 * num_views;
 
         let mut v = vec![0x00; size];
 

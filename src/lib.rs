@@ -196,7 +196,6 @@ impl UnpackedBNLFile {
         let decompressed_bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&bnl_bytes[40..])?;
         bytes.extend_from_slice(&decompressed_bytes);
 
-        // Need to to this so that bytes.extent_from_slice doesn't cause an immutable borrow error
         cur = Cursor::new(&bytes);
 
         let mut new_bnl = UnpackedBNLFile {
@@ -271,21 +270,21 @@ impl UnpackedBNLFile {
         Ok(new_bnl)
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut asset_descs_section: Vec<u8> =
+    pub fn to_bytes(&mut self) -> Vec<u8> {
+        let mut asset_desc_section: Vec<u8> =
             vec![0x00; ASSET_DESCRIPTION_SIZE * self.assets.len()];
         let mut buffer_views_section: Vec<u8> = vec![];
         let mut buffer_section: Vec<u8> = vec![];
         let mut descriptors_section: Vec<u8> = vec![];
 
-        for asset in &self.assets {
+        for (i, asset) in self.assets.iter().enumerate() {
             let mut asset_desc = asset.description.clone();
 
             if let Some(chunks) = &asset.resource_chunks {
                 let num_chunks = chunks.len();
 
                 let dvl = DataViewList {
-                    size: (8 + 16 * num_chunks) as u32,
+                    size: (8 + 8 * num_chunks) as u32,
                     num_views: num_chunks as u32,
                     views: chunks
                         .iter()
@@ -306,19 +305,59 @@ impl UnpackedBNLFile {
                 // Write buffer view information into asset desc
                 asset_desc.dataview_list_ptr = buffer_views_section.len() as u32;
                 asset_desc.resource_size = dvl.bytes_required() as u32;
-                buffer_views_section.write_all(&dvl_bytes);
+                buffer_views_section
+                    .write_all(&dvl_bytes)
+                    .expect("Unable to write buffer view.");
             }
 
             asset_desc.descriptor_ptr = descriptors_section.len() as u32;
             asset_desc.descriptor_size = asset.descriptor_bytes.len() as u32;
             descriptors_section.extend_from_slice(&asset.descriptor_bytes);
 
-            asset_descs_section.extend_from_slice(&asset_desc.to_bytes());
+            let start = i * ASSET_DESCRIPTION_SIZE;
+            let end = start + ASSET_DESCRIPTION_SIZE;
+
+            asset_desc_section[start..end].copy_from_slice(&asset_desc.to_bytes());
         }
+
+        let asset_desc_offset: usize = 40;
+        let asset_desc_size: usize = asset_desc_section.len();
+
+        let buffer_views_offset: usize = asset_desc_offset + asset_desc_size;
+        let buffer_views_size: usize = buffer_views_section.len();
+
+        let buffer_offset: usize = buffer_views_offset + buffer_views_size;
+        let buffer_size: usize = buffer_section.len();
+
+        let descriptors_offset: usize = buffer_offset + buffer_size;
+        let descriptors_size: usize = descriptors_section.len();
+
+        let new_header = BNLHeader {
+            file_count: self.assets.len() as u16,
+            asset_desc_loc: DataView {
+                offset: asset_desc_offset as u32,
+                size: asset_desc_size as u32,
+            },
+            buffer_views_loc: DataView {
+                offset: buffer_views_offset as u32,
+                size: buffer_views_size as u32,
+            },
+            buffer_loc: DataView {
+                offset: buffer_offset as u32,
+                size: buffer_size as u32,
+            },
+            descriptor_loc: DataView {
+                offset: descriptors_offset as u32,
+                size: descriptors_size as u32,
+            },
+            ..self.header
+        };
+
+        self.header = new_header;
 
         let mut decompressed_bytes = Vec::new();
 
-        decompressed_bytes.extend_from_slice(&asset_descs_section);
+        decompressed_bytes.extend_from_slice(&asset_desc_section);
         decompressed_bytes.extend_from_slice(&buffer_views_section);
         decompressed_bytes.extend_from_slice(&buffer_section);
         decompressed_bytes.extend_from_slice(&descriptors_section);
@@ -580,7 +619,6 @@ impl BNLFile {
         let decompressed_bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&bnl_bytes[40..])?;
         bytes.extend_from_slice(&decompressed_bytes);
 
-        // Need to to this so that bytes.extent_from_slice doesn't cause an immutable borrow error
         cur = Cursor::new(&bytes);
 
         let mut new_bnl = BNLFile {
