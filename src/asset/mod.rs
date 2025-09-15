@@ -168,6 +168,13 @@ impl DataViewList {
     pub fn size(&self) -> u32 {
         self.size
     }
+
+    pub fn overlaps(&self, other: &DataViewList) -> bool {
+        self.views
+            .iter()
+            .zip(&other.views)
+            .any(|(v1, v2)| v1.overlaps(v2))
+    }
 }
 
 #[derive(Debug)]
@@ -377,5 +384,84 @@ impl std::fmt::Debug for AssetDescription {
             .field("bufferview_list_ptr", &self.dataview_list_ptr)
             .field("resource_size", &self.resource_size)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_view_overlap() {
+        let dv1 = DataView {
+            offset: 1000,
+            size: 1000,
+        };
+
+        let dv2 = DataView {
+            offset: 1800,
+            size: 100,
+        };
+
+        assert!(dv1.overlaps(&dv2), "[1000,2000) should overlap [1800,1900)");
+
+        let dv3 = DataView {
+            offset: 2000,
+            size: 500,
+        };
+
+        assert!(
+            !dv2.overlaps(&dv3),
+            "[1800,1900) should not overlap [2000,2500)"
+        );
+    }
+
+    #[test]
+    fn dvl_overlap_tests() {
+        let dvl1 = DataViewList {
+            size: 24,
+            num_views: 2,
+            views: vec![
+                DataView {
+                    offset: 1000,
+                    size: 1000,
+                },
+                DataView {
+                    offset: 2000,
+                    size: 1000,
+                },
+            ],
+        };
+
+        let dvl2 = DataViewList {
+            size: 16,
+            num_views: 1,
+            views: vec![DataView {
+                offset: 1800,
+                size: 100,
+            }],
+        };
+
+        let dvl3 = DataViewList {
+            size: 16,
+            num_views: 1,
+            views: vec![DataView {
+                offset: 2000,
+                size: 500,
+            }],
+        };
+
+        let dvl4 = DataViewList {
+            size: 16,
+            num_views: 1,
+            views: vec![DataView {
+                offset: 1999,
+                size: 500,
+            }],
+        };
+
+        assert!(dvl1.overlaps(&dvl2), "(1) These should overlap.");
+        assert!(!dvl2.overlaps(&dvl3), "(2) These should not overlap.");
+        assert!(dvl1.overlaps(&dvl4), "(3) These should overlap.");
     }
 }

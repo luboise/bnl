@@ -40,6 +40,30 @@ impl DataView {
 
         Ok(DataView { offset, size })
     }
+
+    pub fn as_range<T: From<u32>>(&self) -> Range<T> {
+        let start: T = self.offset.into();
+        let end: T = (self.offset + self.size).into();
+
+        start..end
+    }
+
+    pub fn overlaps(&self, other: &DataView) -> bool {
+        let r1: Range<u32> = self.as_range();
+        let r2: Range<u32> = other.as_range();
+
+        r1.start < r2.end && r2.start < r1.end
+
+        /*
+        let start1 = range.start;
+        let end1 = range.end;
+
+        let start2 = asset_desc.descriptor_ptr as usize;
+        let end2 = start2 + asset_desc.descriptor_size as usize;
+
+        start1 < end2 && start2 < end1
+        */
+    }
 }
 
 #[derive(Debug)]
@@ -404,6 +428,43 @@ impl BNLFile {
         }
 
         Err(AssetError::NotFound)
+    }
+
+    pub fn get_overlaps(&self) -> Result<Vec<Range<usize>>, BNLError> {
+        let mut dvls = Vec::with_capacity(self.asset_descriptions().len());
+
+        self.asset_descriptions()
+            .iter()
+            .filter(|asset_desc| asset_desc.dataview_list_ptr != 0)
+            .map(|asset_desc| {
+                DataViewList::from_bytes(
+                    &self.buffer_views_bytes[asset_desc.dataview_list_ptr as usize..],
+                )
+            });
+
+        for asset_desc in self.asset_descriptions() {
+            if asset_desc.dataview_list_ptr != 0 {
+                dvls.push(
+                    DataViewList::from_bytes(
+                        &self.buffer_views_bytes[asset_desc.dataview_list_ptr as usize..],
+                    )
+                    .map_err(|_| {
+                        BNLError::DataReadError(format!(
+                            "Unable to read Data View List for asset {}",
+                            asset_desc.name()
+                        ))
+                    })?,
+                );
+            }
+        }
+
+        for pair in dvls.iter().zip(&dvls) {
+            if std::ptr::eq(pair.0, pair.1) {
+                continue;
+            }
+        }
+
+        Ok(vec![])
     }
 
     /// Retrieves all [`RawAsset`] entries.
