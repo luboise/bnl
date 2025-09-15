@@ -14,17 +14,20 @@ use crate::{
         Asset, AssetDescriptor, AssetParseError,
         model::sub_main::{Mesh, MeshDescriptor},
         texture::{Texture, TextureDescriptor},
+        Asset, AssetDescription, AssetDescriptor, AssetParseError,
+        texture::{TextureData, TextureDescriptor},
     },
     game::AssetType,
 };
 
 #[derive(Debug)]
 pub struct Model {
-    name: String,
+    description: AssetDescription,
     descriptor: ModelDescriptor,
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
     textures: Vec<Texture>,
     meshes: Vec<Mesh>,
+    textures: Vec<TextureData>,
 }
 
 #[repr(u32)]
@@ -187,7 +190,7 @@ impl Asset for Model {
     type Descriptor = ModelDescriptor;
 
     fn new(
-        name: &str,
+        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
@@ -198,18 +201,17 @@ impl Asset for Model {
         }
 
         let mut model = Model {
-            name: name.to_string(),
+            description: description.clone(),
             descriptor: descriptor.clone(),
             textures: vec![],
             meshes: todo!(),
         };
 
         for subtex_desc in &model.descriptor.texture_descriptors {
-            let desc: TextureDescriptor = subtex_desc.clone().into();
-
-            // Safe to pass data_slices here because models always use resource0 for the tex slot
-            // on the main model
-            model.textures.push(Texture::new("", &desc, virtual_res)?);
+            model.textures.push(TextureData::new(
+                subtex_desc.clone().into(),
+                virtual_res.get_all_bytes(),
+            ));
         }
 
         Ok(model)
@@ -219,11 +221,11 @@ impl Asset for Model {
         &self.descriptor
     }
 
-    fn name(&self) -> &str {
-        &self.name
+    fn description(&self) -> &super::AssetDescription {
+        todo!()
     }
 
-    fn resource_data(&self) -> Vec<u8> {
+    fn as_bnl_asset(&self) -> crate::BNLAsset {
         todo!()
     }
 }
@@ -232,7 +234,7 @@ pub trait Subresource {}
 
 impl Model {
     /// Returns a list of textures if the model has any, and None otherwise.
-    pub fn textures(&self) -> Option<&Vec<Texture>> {
+    pub fn textures(&self) -> Option<&Vec<TextureData>> {
         Some(&self.textures)
     }
 }

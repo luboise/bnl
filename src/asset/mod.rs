@@ -8,6 +8,7 @@ use crate::{
     DataView, VirtualResource, VirtualResourceError, asset::model::sub_main::SubresourceError,
     game::AssetType,
 };
+use crate::{BNLAsset, DataView, VirtualResource, VirtualResourceError, game::AssetType};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
@@ -28,9 +29,9 @@ pub struct RawAsset {
 
 #[derive(Debug, Clone)]
 pub struct DataViewList {
-    size: u32,
-    num_views: u32,
-    views: Vec<DataView>,
+    pub(crate) size: u32,
+    pub(crate) num_views: u32,
+    pub(crate) views: Vec<DataView>,
 }
 
 impl DataViewList {
@@ -111,9 +112,9 @@ impl DataViewList {
     pub fn write_bytes(
         &self,
         bytes: &[u8],
-        resource: &mut Vec<u8>,
+        resource: &mut [u8],
     ) -> Result<(), VirtualResourceError> {
-        let dvl_size = self.len();
+        let dvl_size = self.bytes_required();
         let write_size = bytes.len();
 
         if dvl_size != write_size {
@@ -159,7 +160,7 @@ impl DataViewList {
         Ok(())
     }
 
-    pub fn len(&self) -> usize {
+    pub fn bytes_required(&self) -> usize {
         self.views().iter().map(|view| view.size as usize).sum()
     }
 
@@ -173,6 +174,35 @@ impl DataViewList {
 
     pub fn size(&self) -> u32 {
         self.size
+    }
+
+    pub fn overlaps(&self, other: &DataViewList) -> bool {
+        self.views
+            .iter()
+            .zip(&other.views)
+            .any(|(v1, v2)| v1.overlaps(v2))
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let num_views = self.views.len();
+
+        let size = 8 + 8 * num_views;
+
+        let mut v = vec![0x00; size];
+
+        let mut cur = Cursor::new(&mut v[..]);
+
+        cur.write_u32::<LittleEndian>(size as u32).unwrap();
+        cur.write_u32::<LittleEndian>(num_views as u32).unwrap();
+
+        self.views.iter().for_each(|view| {
+            cur.write_u32::<LittleEndian>(view.offset)
+                .expect("View offset should've been accounted for.");
+            cur.write_u32::<LittleEndian>(view.size)
+                .expect("View size should've been accounted for.");
+        });
+
+        v
     }
 }
 
@@ -204,6 +234,11 @@ impl From<std::io::Error> for AssetParseError {
 impl From<SubresourceError> for AssetParseError {
     fn from(_: SubresourceError) -> Self {
         Self::ErrorParsingDescriptor
+    fn from(value: std::io::Error) -> Self {
+        AssetParseError::InvalidDataViews(format!(
+            "IO error occurred when parsing Asset.\n{}",
+            value
+        ))
     }
 }
 
@@ -255,20 +290,23 @@ pub trait AssetDescriptor: Sized + Clone {
 pub trait Asset: Sized {
     type Descriptor: AssetDescriptor;
 
-    fn descriptor(&self) -> &Self::Descriptor;
     fn new(
-        name: &str,
+        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError>;
 
-    fn resource_data(&self) -> Vec<u8>;
+    fn description(&self) -> &AssetDescription;
+    fn descriptor(&self) -> &Self::Descriptor;
 
     fn asset_type() -> AssetType {
         Self::Descriptor::asset_type()
     }
+    fn name(&self) -> &str {
+        self.description().name()
+    }
 
-    fn name(&self) -> &str;
+    fn as_bnl_asset(&self) -> BNLAsset;
 }
 
 pub type AssetName = [u8; 128];
@@ -391,5 +429,84 @@ impl std::fmt::Debug for AssetDescription {
             .field("bufferview_list_ptr", &self.dataview_list_ptr)
             .field("resource_size", &self.resource_size)
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_view_overlap() {
+        let dv1 = DataView {
+            offset: 1000,
+            size: 1000,
+        };
+
+        let dv2 = DataView {
+            offset: 1800,
+            size: 100,
+        };
+
+        assert!(dv1.overlaps(&dv2), "[1000,2000) should overlap [1800,1900)");
+
+        let dv3 = DataView {
+            offset: 2000,
+            size: 500,
+        };
+
+        assert!(
+            !dv2.overlaps(&dv3),
+            "[1800,1900) should not overlap [2000,2500)"
+        );
+    }
+
+    #[test]
+    fn dvl_overlap_tests() {
+        let dvl1 = DataViewList {
+            size: 24,
+            num_views: 2,
+            views: vec![
+                DataView {
+                    offset: 1000,
+                    size: 1000,
+                },
+                DataView {
+                    offset: 2000,
+                    size: 1000,
+                },
+            ],
+        };
+
+        let dvl2 = DataViewList {
+            size: 16,
+            num_views: 1,
+            views: vec![DataView {
+                offset: 1800,
+                size: 100,
+            }],
+        };
+
+        let dvl3 = DataViewList {
+            size: 16,
+            num_views: 1,
+            views: vec![DataView {
+                offset: 2000,
+                size: 500,
+            }],
+        };
+
+        let dvl4 = DataViewList {
+            size: 16,
+            num_views: 1,
+            views: vec![DataView {
+                offset: 1999,
+                size: 500,
+            }],
+        };
+
+        assert!(dvl1.overlaps(&dvl2), "(1) These should overlap.");
+        assert!(!dvl2.overlaps(&dvl3), "(2) These should not overlap.");
+        assert!(dvl1.overlaps(&dvl4), "(3) These should overlap.");
     }
 }

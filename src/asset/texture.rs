@@ -7,8 +7,8 @@ use std::{
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::{
-    VirtualResource, VirtualResourceError,
-    asset::{Asset, AssetDescriptor, AssetParseError},
+    BNLAsset, VirtualResource, VirtualResourceError,
+    asset::{Asset, AssetDescription, AssetDescriptor, AssetParseError},
     d3d::{D3DFormat, LinearColour, PixelBits, StandardFormat, Swizzled},
     game::AssetType,
     images::{self},
@@ -97,9 +97,20 @@ pub enum TextureError {
 
 #[derive(Debug)]
 pub struct Texture {
-    name: String,
+    description: AssetDescription,
+    data: TextureData,
+}
+
+#[derive(Debug, Clone)]
+pub struct TextureData {
     descriptor: TextureDescriptor,
-    data: Vec<u8>,
+    bytes: Vec<u8>,
+}
+
+impl TextureData {
+    pub fn new(descriptor: TextureDescriptor, bytes: Vec<u8>) -> Self {
+        TextureData { descriptor, bytes }
+    }
 }
 
 impl AssetDescriptor for TextureDescriptor {
@@ -108,7 +119,7 @@ impl AssetDescriptor for TextureDescriptor {
             return Err(AssetParseError::InputTooSmall);
         }
 
-        let mut cur = Cursor::new(&data[..]);
+        let mut cur = Cursor::new(data);
 
         let format = match cur.read_u32::<LittleEndian>()? {
             0x00000012 => D3DFormat::Swizzled(Swizzled::B8G8R8A8),
@@ -159,15 +170,15 @@ impl AssetDescriptor for TextureDescriptor {
 
         let mut cur = Cursor::new(&mut bytes[..]);
 
-        cur.write_u32::<LittleEndian>(self.format().into());
+        cur.write_u32::<LittleEndian>(self.format().into())?;
 
-        cur.write_u32::<LittleEndian>(self.header_size);
-        cur.write_u16::<LittleEndian>(self.width);
-        cur.write_u16::<LittleEndian>(self.height);
-        cur.write_u32::<LittleEndian>(self.flags);
-        cur.write_u32::<LittleEndian>(self.unknown_3a);
-        cur.write_u32::<LittleEndian>(self.texture_offset);
-        cur.write_u32::<LittleEndian>(self.texture_size);
+        cur.write_u32::<LittleEndian>(self.header_size)?;
+        cur.write_u16::<LittleEndian>(self.width)?;
+        cur.write_u16::<LittleEndian>(self.height)?;
+        cur.write_u32::<LittleEndian>(self.flags)?;
+        cur.write_u32::<LittleEndian>(self.unknown_3a)?;
+        cur.write_u32::<LittleEndian>(self.texture_offset)?;
+        cur.write_u32::<LittleEndian>(self.texture_size)?;
 
         Ok(bytes)
     }
@@ -177,7 +188,7 @@ impl Asset for Texture {
     type Descriptor = TextureDescriptor;
 
     fn new(
-        name: &str,
+        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
@@ -214,22 +225,31 @@ impl Asset for Texture {
         };
 
         Ok(Texture {
-            name: name.to_string(),
-            descriptor: descriptor.clone(),
-            data: bytes,
+            description: description.clone(),
+            data: TextureData {
+                descriptor: descriptor.clone(),
+                bytes,
+            },
         })
     }
 
     fn descriptor(&self) -> &Self::Descriptor {
-        &self.descriptor
+        &self.data.descriptor
     }
 
-    fn name(&self) -> &str {
-        &self.name
+    fn as_bnl_asset(&self) -> BNLAsset {
+        BNLAsset {
+            description: self.description().clone(),
+            descriptor_bytes: self
+                .descriptor()
+                .to_bytes()
+                .expect("Fatal error creating BNLAsset from Texture."),
+            resource_chunks: Some(vec![self.data.bytes.clone()]), // Single view of the texture bytes
+        }
     }
 
-    fn resource_data(&self) -> Vec<u8> {
-        self.data.clone()
+    fn description(&self) -> &AssetDescription {
+        &self.description
     }
 }
 
@@ -263,36 +283,36 @@ impl Texture {
     ) -> Result<(), TextureError> {
         if data.len() < width * height * 4 {
             return Err(TextureError::SizeMismatch);
-        } else if width != self.descriptor.width as usize
-            || height != self.descriptor.height as usize
+        } else if width != self.descriptor().width as usize
+            || height != self.descriptor().height as usize
         {
             return Err(TextureError::SizeMismatch);
         }
 
         let transcoded = images::transcode(
-            self.descriptor.width as usize,
-            self.descriptor.height as usize,
+            self.descriptor().width as usize,
+            self.descriptor().height as usize,
             D3DFormat::Swizzled(Swizzled::R8G8B8A8),
-            self.descriptor.format,
-            &data,
+            self.descriptor().format,
+            data,
         )
         .map_err(|_| {
             eprintln!(
                 "Unable to convert from RGBA to format {:?}",
-                self.descriptor.format
+                self.descriptor().format
             );
             TextureError::UnsupportedOutputType
         })?;
 
-        self.data = transcoded;
+        self.data.bytes = transcoded;
 
         Ok(())
     }
 
     pub fn to_rgba_image(&self) -> Result<Image, std::io::Error> {
-        let mut bytes: Vec<u8> = self.data.clone();
+        let mut bytes: Vec<u8> = self.data.bytes.clone();
 
-        let desired_format: D3DFormat = match self.descriptor.format {
+        let desired_format: D3DFormat = match self.descriptor().format {
             D3DFormat::Linear(LinearColour::R8G8B8A8)
             | D3DFormat::Swizzled(Swizzled::A8B8G8R8)
             | D3DFormat::Swizzled(Swizzled::A8R8G8B8) => D3DFormat::Linear(LinearColour::R8G8B8A8),
@@ -300,7 +320,7 @@ impl Texture {
                 /*
                 eprintln!(
                     "Unexpected format found during dump: {:?}. Attempting to dump anyway.",
-                    self.descriptor.format
+                    self.descriptor().format
                 );
                 */
 
@@ -308,19 +328,19 @@ impl Texture {
             }
         };
 
-        if desired_format != self.descriptor.format {
+        if desired_format != self.descriptor().format {
             bytes = images::transcode(
-                self.descriptor.width.into(),
-                self.descriptor.height.into(),
-                self.descriptor.format,
+                self.descriptor().width.into(),
+                self.descriptor().height.into(),
+                self.descriptor().format,
                 desired_format,
                 bytes.as_ref(),
             )?;
         }
 
         Ok(Image {
-            width: self.descriptor.width as usize,
-            height: self.descriptor.height as usize,
+            width: self.descriptor().width as usize,
+            height: self.descriptor().height as usize,
             bytes,
         })
     }
@@ -333,8 +353,8 @@ impl Texture {
 
         let mut encoder = png::Encoder::new(
             w,
-            self.descriptor.width as u32,
-            self.descriptor.height as u32,
+            self.descriptor().width as u32,
+            self.descriptor().height as u32,
         ); // Width is 2 pixels and height is 1.
 
         // TODO: Set this per texture type
