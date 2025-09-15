@@ -8,7 +8,8 @@ use crate::{
     VirtualResource,
     asset::{
         Asset, AssetDescriptor, AssetParseError,
-        script::ops::{KnownOpcode, ScriptOpcode, ScriptOperationShape},
+        param::{HasParams, Param, ParamsShape},
+        script::ops::{KnownOpcode, ScriptOpcode},
     },
     game::AssetType,
 };
@@ -55,11 +56,13 @@ pub struct ScriptOperation {
     operand_bytes: Vec<u8>,
 }
 
-impl ScriptOperation {
-    pub fn get_shape(&self) -> ScriptOperationShape {
+impl HasParams for ScriptOperation {
+    fn get_shape(&self) -> ParamsShape {
         self.opcode.get_shape()
     }
+}
 
+impl ScriptOperation {
     pub fn size(&self) -> u32 {
         self.size
     }
@@ -88,6 +91,26 @@ impl ScriptOperation {
 
     pub fn operand_bytes_mut(&mut self) -> &mut Vec<u8> {
         &mut self.operand_bytes
+    }
+
+    pub fn set_param_by_name<T: Param>(&mut self, name: &str, val: T) -> Result<(), ScriptError> {
+        let shape = self.get_shape();
+        if let Some(details) = shape.get(name) {
+            if size_of::<T>() != details.param_type.size() {
+                return Err(ScriptError::SizeMismatch);
+            }
+
+            let bytes = val.to_param_bytes();
+
+            // TODO: Make this based on the parameter's actual offset
+            let offset = 0;
+
+            self.operand_bytes_mut()[offset..].copy_from_slice(&bytes);
+
+            Ok(())
+        } else {
+            Err(ScriptError::UnsupportedOutputType)
+        }
     }
 }
 
@@ -154,40 +177,6 @@ impl AssetDescriptor for ScriptDescriptor {
 
     fn asset_type() -> AssetType {
         AssetType::ResScript
-    }
-}
-
-#[derive(Debug)]
-pub enum ScriptParamType {
-    F32,
-    F64,
-    U8,
-    I8,
-    I16,
-    U16,
-    I32,
-    U32,
-    I64,
-    U64,
-
-    String(usize),
-    WString(usize),
-    Bytes(usize),
-}
-
-#[derive(Debug)]
-pub struct ScriptParamDetails {
-    param_type: ScriptParamType,
-    description: String,
-}
-
-impl ScriptParamDetails {
-    pub fn param_type(&self) -> &ScriptParamType {
-        &self.param_type
-    }
-
-    pub fn description(&self) -> &str {
-        &self.description
     }
 }
 

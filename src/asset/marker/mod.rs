@@ -1,0 +1,323 @@
+pub mod ops;
+
+use std::{
+    fs::File,
+    io::{BufWriter, Cursor},
+    path::Path,
+};
+
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+
+use crate::{
+    VirtualResource, VirtualResourceError,
+    asset::{Asset, AssetDescriptor, AssetParseError},
+    d3d::{D3DFormat, LinearColour, StandardFormat, Swizzled},
+    game::AssetType,
+};
+
+
+#[derive(Debug, Clone)]
+pub struct Entry {}
+
+#[derive(Debug, Clone)]
+pub struct MarkerDescriptor {
+    entries: Vec<Entry>,
+}
+
+impl Descriptor {
+    pub fn new(
+        format: D3DFormat,
+        header_size: u32,
+        width: u16,
+        height: u16,
+        flags: u32,
+        unknown_3a: u32,
+        texture_offset: u32,
+        texture_size: u32,
+    ) -> Self {
+        Self {
+            format,
+            header_size,
+            width,
+            height,
+            flags,
+            unknown_3a,
+            texture_offset,
+            texture_size,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum Error {}
+
+#[derive(Debug)]
+pub struct Marker {
+    name: String,
+    descriptor: Descriptor,
+    data: Vec<u8>,
+}
+
+impl AssetDescriptor for Descriptor {
+    fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError> {
+        if data.len() < TEXTURE_DESCRIPTOR_SIZE {
+            return Err(AssetParseError::InputTooSmall);
+        }
+
+        let mut cur = Cursor::new(&data[..]);
+
+        let format = match cur.read_u32::<LittleEndian>()? {
+            0x00000012 => D3DFormat::Swizzled(Swizzled::B8G8R8A8),
+            0x0000003f => D3DFormat::Swizzled(Swizzled::A8B8G8R8),
+            0x00000040 => D3DFormat::Linear(LinearColour::A8R8G8B8),
+            0x0000000c => D3DFormat::Standard(StandardFormat::DXT1),
+            0x0000000e => D3DFormat::Standard(StandardFormat::DXT2Or3),
+            0x0000000f => D3DFormat::Standard(StandardFormat::DXT4Or5),
+            unknown_format => {
+                println!(
+                    "Unimplemented format found {}. Assuming A8B8G8R8.",
+                    unknown_format
+                );
+                D3DFormat::Linear(LinearColour::A8R8G8B8)
+            }
+        };
+
+        let header_size = cur.read_u32::<LittleEndian>()?;
+        let width = cur.read_u16::<LittleEndian>()?;
+        let height = cur.read_u16::<LittleEndian>()?;
+        let flags = cur.read_u32::<LittleEndian>()?;
+        let unknown_3a = cur.read_u32::<LittleEndian>()?;
+        let texture_offset = cur.read_u32::<LittleEndian>()?;
+        let texture_size = cur.read_u32::<LittleEndian>()?;
+
+        Ok(Descriptor {
+            format,
+            header_size,
+            width,
+            height,
+            flags,
+            unknown_3a,
+            texture_offset,
+            texture_size,
+        })
+    }
+
+    fn size(&self) -> usize {
+        TEXTURE_DESCRIPTOR_SIZE
+    }
+
+    fn asset_type() -> AssetType {
+        AssetType::Res
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, AssetParseError> {
+        let mut bytes = vec![0x00; TEXTURE_DESCRIPTOR_SIZE];
+
+        let mut cur = Cursor::new(&mut bytes[..]);
+
+        cur.write_u32::<LittleEndian>(self.format().into());
+
+        cur.write_u32::<LittleEndian>(self.header_size);
+        cur.write_u16::<LittleEndian>(self.width);
+        cur.write_u16::<LittleEndian>(self.height);
+        cur.write_u32::<LittleEndian>(self.flags);
+        cur.write_u32::<LittleEndian>(self.unknown_3a);
+        cur.write_u32::<LittleEndian>(self.texture_offset);
+        cur.write_u32::<LittleEndian>(self.texture_size);
+
+        Ok(bytes)
+    }
+}
+
+impl Asset for  {
+    type Descriptor = Descriptor;
+
+    fn new(
+        name: &str,
+        descriptor: &Self::Descriptor,
+        virtual_res: &VirtualResource,
+    ) -> Result<Self, AssetParseError> {
+        if virtual_res.is_empty() {
+            return Err(AssetParseError::InvalidDataViews(
+                "Unable to create a  using 0 data views".to_string(),
+            ));
+        }
+
+        let offset = descriptor.texture_offset as usize;
+        let size = descriptor.texture_size as usize;
+
+        let bytes = match virtual_res.get_bytes(offset, size) {
+            Ok(b) => b,
+            Err(e) => {
+                match e {
+                    VirtualResourceError::OffsetOutOfBounds => {
+                        return Err(AssetParseError::InvalidDataViews(format!(
+                            "Offset {} is out of bounds for virtual resource of size {}",
+                            offset,
+                            virtual_res.len()
+                        )));
+                    }
+
+                    VirtualResourceError::SizeOutOfBounds => {
+                        return Err(AssetParseError::InvalidDataViews(format!(
+                            "Size would reach offset {}, which is out of bounds for virtual resource of size {}",
+                            offset + size,
+                            virtual_res.len()
+                        )));
+                    }
+                };
+            }
+        };
+
+        Ok( {
+            name: name.to_string(),
+            descriptor: descriptor.clone(),
+            data: bytes,
+        })
+    }
+
+    fn descriptor(&self) -> &Self::Descriptor {
+        &self.descriptor
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn resource_data(&self) -> Vec<u8> {
+        self.data.clone()
+    }
+}
+
+#[derive(Clone)]
+pub struct Image {
+    width: usize,
+    height: usize,
+    bytes: Vec<u8>,
+}
+
+impl Image {
+    pub fn width(&self) -> usize {
+        self.width
+    }
+
+    pub fn height(&self) -> usize {
+        self.height
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl  {
+    pub fn set_from_rgba(
+        &mut self,
+        width: usize,
+        height: usize,
+        data: &[u8],
+    ) -> Result<(), Error> {
+        if data.len() < width * height * 4 {
+            return Err(Error::SizeMismatch);
+        } else if width != self.descriptor.width as usize
+            || height != self.descriptor.height as usize
+        {
+            return Err(Error::SizeMismatch);
+        }
+
+        let transcoded = images::transcode(
+            self.descriptor.width as usize,
+            self.descriptor.height as usize,
+            D3DFormat::Swizzled(Swizzled::R8G8B8A8),
+            self.descriptor.format,
+            &data,
+        )
+        .map_err(|_| {
+            eprintln!(
+                "Unable to convert from RGBA to format {:?}",
+                self.descriptor.format
+            );
+            Error::UnsupportedOutputType
+        })?;
+
+        self.data = transcoded;
+
+        Ok(())
+    }
+
+    pub fn to_rgba_image(&self) -> Result<Image, std::io::Error> {
+        let mut bytes: Vec<u8> = self.data.clone();
+
+        let desired_format: D3DFormat = match self.descriptor.format {
+            D3DFormat::Linear(LinearColour::R8G8B8A8)
+            | D3DFormat::Swizzled(Swizzled::A8B8G8R8)
+            | D3DFormat::Swizzled(Swizzled::A8R8G8B8) => D3DFormat::Linear(LinearColour::R8G8B8A8),
+            _ => {
+                /*
+                eprintln!(
+                    "Unexpected format found during dump: {:?}. Attempting to dump anyway.",
+                    self.descriptor.format
+                );
+                */
+
+                D3DFormat::Linear(LinearColour::R8G8B8A8)
+            }
+        };
+
+        if desired_format != self.descriptor.format {
+            bytes = images::transcode(
+                self.descriptor.width.into(),
+                self.descriptor.height.into(),
+                self.descriptor.format,
+                desired_format,
+                bytes.as_ref(),
+            )?;
+        }
+
+        Ok(Image {
+            width: self.descriptor.width as usize,
+            height: self.descriptor.height as usize,
+            bytes,
+        })
+    }
+
+    pub fn dump(&self, path: &Path) -> Result<(), std::io::Error> {
+        let image = self.to_rgba_image()?;
+
+        let file = File::create(path).unwrap();
+        let w = &mut BufWriter::new(file);
+
+        let mut encoder = png::Encoder::new(
+            w,
+            self.descriptor.width as u32,
+            self.descriptor.height as u32,
+        ); // Width is 2 pixels and height is 1.
+
+        // TODO: Set this per texture type
+        let use_rgba = true;
+
+        encoder.set_color(match use_rgba {
+            true => png::ColorType::Rgba,
+            false => png::ColorType::Rgb,
+        });
+        encoder.set_depth(png::BitDepth::Eight);
+
+        // encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2));
+        /*
+        let chroma = png::SourceChromaticities::new(
+            (0.3127, 0.3290), // red
+            (0.6400, 0.3300), // green
+            (0.3000, 0.6000), // blue
+            (0.1500, 0.0600), // white
+        );
+        encoder.set_source_chromaticities(chroma);
+        */
+
+        let mut writer = encoder.write_header().unwrap();
+
+        writer.write_image_data(&image.bytes)?;
+        writer.finish().expect("Unable to close writer");
+
+        Ok(())
+    }
+}

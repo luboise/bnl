@@ -1,3 +1,5 @@
+pub mod gltf;
+pub mod nd;
 pub mod sub_main;
 
 use std::io::{Cursor, Seek, SeekFrom};
@@ -10,6 +12,7 @@ use crate::{
     VirtualResource,
     asset::{
         Asset, AssetDescriptor, AssetParseError,
+        model::sub_main::{Mesh, MeshDescriptor},
         texture::{Texture, TextureDescriptor},
     },
     game::AssetType,
@@ -21,12 +24,13 @@ pub struct Model {
     descriptor: ModelDescriptor,
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
     textures: Vec<Texture>,
+    meshes: Vec<Mesh>,
 }
 
 #[repr(u32)]
 #[derive(Debug, Clone, TryFromPrimitive, IntoPrimitive)]
 pub enum ModelSubresType {
-    Model = 0x00,
+    Mesh = 0x00,
     Unknown1 = 0x01,
     Unknown2 = 0x02,
     Unknown3 = 0x03,
@@ -62,6 +66,8 @@ pub struct ModelDescriptor {
     subresource_count: u32,
     raw_subresources: Vec<RawModelSubresource>,
     texture_descriptors: Vec<TextureDescriptor>,
+
+    mesh_descriptors: Vec<MeshDescriptor>,
 }
 
 impl AssetDescriptor for ModelDescriptor {
@@ -90,8 +96,8 @@ impl AssetDescriptor for ModelDescriptor {
         cur.seek(SeekFrom::Start(subresources_offset as u64))?;
 
         let mut raw_subresources = vec![];
-
         let mut texture_descriptors = vec![];
+        let mut mesh_descriptors = vec![];
 
         for _ in 0..subresource_count {
             let subres_type: ModelSubresType = cur
@@ -131,6 +137,26 @@ impl AssetDescriptor for ModelDescriptor {
                         texture_descriptors.push(tex_desc);
                     }
                 }
+                ModelSubresType::Mesh => {
+                    let mut mesh_cur = cur.clone();
+
+                    mesh_cur.seek(SeekFrom::Start(subres_param as u64))?;
+
+                    let mut mesh_ptrs = Vec::new();
+
+                    loop {
+                        let ptr = mesh_cur.read_u32::<LittleEndian>()? as usize;
+                        if ptr == 0 {
+                            break;
+                        }
+                        mesh_ptrs.push(ptr);
+                    }
+
+                    for ptr in mesh_ptrs {
+                        // TODO: Bounds check for ptr
+                        mesh_descriptors.push(MeshDescriptor::from_bytes(&data[ptr..])?);
+                    }
+                }
                 _ => {}
             };
         }
@@ -140,6 +166,7 @@ impl AssetDescriptor for ModelDescriptor {
             subresource_count,
             raw_subresources,
             texture_descriptors,
+            mesh_descriptors,
         })
     }
 
@@ -174,6 +201,7 @@ impl Asset for Model {
             name: name.to_string(),
             descriptor: descriptor.clone(),
             textures: vec![],
+            meshes: todo!(),
         };
 
         for subtex_desc in &model.descriptor.texture_descriptors {

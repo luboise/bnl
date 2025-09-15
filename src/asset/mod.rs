@@ -4,10 +4,16 @@ use std::{
     io::{self, Cursor, Read, Write},
 };
 
-use crate::{DataView, VirtualResource, VirtualResourceError, game::AssetType};
+use crate::{
+    DataView, VirtualResource, VirtualResourceError, asset::model::sub_main::SubresourceError,
+    game::AssetType,
+};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
+pub mod param;
+
+// pub mod marker;
 pub mod model;
 pub mod script;
 pub mod texture;
@@ -188,8 +194,16 @@ impl Display for AssetParseError {
 }
 
 impl From<std::io::Error> for AssetParseError {
-    fn from(value: std::io::Error) -> Self {
-        AssetParseError::InvalidDataViews("IO error occurred when parsing Asset.".to_string())
+    fn from(e: std::io::Error) -> Self {
+        AssetParseError::InvalidDataViews(
+            format!("IO error occurred when parsing Asset.\nError: {}", e).to_string(),
+        )
+    }
+}
+
+impl From<SubresourceError> for AssetParseError {
+    fn from(_: SubresourceError) -> Self {
+        Self::ErrorParsingDescriptor
     }
 }
 

@@ -255,3 +255,62 @@ impl PixelBits for D3DFormat {
         }
     }
 }
+
+#[repr(u32)]
+#[derive(Debug, Clone)]
+pub enum D3DPrimitiveType {
+    None = 0,
+    PointList = 1,
+    LineList = 2,
+    LineLoop = 3,
+    LineStrip = 4,
+    TriangleList = 5,
+    TriangleStrip = 6,
+    TriangleFan = 7,
+    QuadList = 8,
+    QuadStrip = 9,
+    Polygon = 10,
+    Max = 11,
+    Invalid = 0x7ffffff,
+}
+
+impl From<D3DPrimitiveType> for u32 {
+    fn from(value: D3DPrimitiveType) -> Self {
+        match value {
+            D3DPrimitiveType::None => 0,
+            D3DPrimitiveType::PointList => 1,
+            D3DPrimitiveType::LineList => 2,
+            D3DPrimitiveType::LineLoop => 3,
+            D3DPrimitiveType::LineStrip => 4,
+            D3DPrimitiveType::TriangleList => 5,
+            D3DPrimitiveType::TriangleStrip => 6,
+            D3DPrimitiveType::TriangleFan => 7,
+            D3DPrimitiveType::QuadList => 8,
+            D3DPrimitiveType::QuadStrip => 9,
+            D3DPrimitiveType::Polygon => 10,
+            D3DPrimitiveType::Max => 11,
+            D3DPrimitiveType::Invalid => 0x7ffffff,
+        }
+    }
+}
+
+impl From<u32> for D3DPrimitiveType {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => Self::None,
+            1 => Self::PointList,
+            2 => Self::LineList,
+            3 => Self::LineLoop,
+            4 => Self::LineStrip,
+            5 => Self::TriangleList,
+            6 => Self::TriangleStrip,
+            7 => Self::TriangleFan,
+            8 => Self::QuadList,
+            9 => Self::QuadStrip,
+            10 => Self::Polygon,
+            11 => Self::Max,
+            0x7ffffff => Self::Invalid,
+            _ => Self::Invalid,
+        }
+    }
+}
