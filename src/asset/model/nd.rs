@@ -1,12 +1,11 @@
 use std::{
     io::{self, Cursor, Read, Seek, SeekFrom},
     iter::{self},
-    task::Wake,
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use mod3d_base::BufferElementType;
-use mod3d_gltf::{AccessorIndex, BufferIndex, Gltf, ViewIndex};
+use mod3d_gltf::{AccessorIndex, Gltf, ViewIndex};
 
 use crate::{asset::param::KnownUnknown, d3d::D3DPrimitiveType};
 
@@ -146,6 +145,14 @@ impl NdHeader {
             first_child,
             next_sibling,
         })
+    }
+
+    pub fn first_child(&self) -> Option<&Box<Nd>> {
+        self.first_child.as_ref()
+    }
+
+    pub fn next_sibling(&self) -> Option<&Box<Nd>> {
+        self.next_sibling.as_ref()
     }
 }
 
