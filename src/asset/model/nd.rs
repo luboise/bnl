@@ -189,7 +189,57 @@ impl Nd {
                         resource_views,
                     }))
                 }
-                KnownNdType::PushBuffer => todo!(),
+                KnownNdType::PushBuffer => {
+                    let num_draws = cur.read_u32::<LittleEndian>()?;
+                    let unknown_u32_1 = cur.read_u32::<LittleEndian>()?;
+                    let unknown_u32_2 = cur.read_u32::<LittleEndian>()?;
+                    let unknown_u32_3 = cur.read_u32::<LittleEndian>()?;
+
+                    let data_pointers_start = cur.read_u32::<LittleEndian>()?;
+                    let primitive_types_list_ptr = cur.read_u32::<LittleEndian>()?;
+                    let vertex_counts_list_ptr = cur.read_u32::<LittleEndian>()?;
+
+                    let prevent_culling_flag = cur.read_u8()?;
+                    let mut padding = [0u8; 3];
+
+                    cur.read_exact(&mut padding)?;
+
+                    let mut data_ptr_cur = cur.clone();
+                    data_ptr_cur.seek(SeekFrom::Start(data_pointers_start as u64))?;
+
+                    let mut prim_type_ptr = cur.clone();
+                    prim_type_ptr.seek(SeekFrom::Start(primitive_types_list_ptr as u64))?;
+
+                    let mut vertex_counts_ptr = cur.clone();
+                    vertex_counts_ptr.seek(SeekFrom::Start(vertex_counts_list_ptr as u64))?;
+
+                    let mut draw_calls = Vec::with_capacity(num_draws as usize);
+
+                    for _ in 0..num_draws as usize {
+                        draw_calls.push(DrawCall {
+                            data_ptr: data_ptr_cur.read_u32::<LittleEndian>()?,
+                            prim_type: prim_type_ptr.read_u32::<LittleEndian>()?.into(),
+                            data_size: vertex_counts_ptr.read_u32::<LittleEndian>()?,
+                        });
+                    }
+
+                    Ok(Nd::PushBuffer(NdPushBuffer {
+                        header,
+                        num_draws,
+                        unknown_u32_1,
+                        unknown_u32_2,
+                        unknown_u32_3,
+                        //
+                        data_pointers_start,
+                        primitive_types_list_ptr,
+                        vertex_counts_list_ptr,
+                        //
+                        prevent_culling_flag,
+                        padding,
+
+                        draw_calls,
+                    }))
+                }
             }
         } else {
             Ok(Nd::Other())
@@ -274,13 +324,16 @@ pub struct NdPushBuffer {
     unknown_u32_2: u32,
     unknown_u32_3: u32,
 
-    push_data_list_ptr: u32,
+    // File offsets
+    data_pointers_start: u32,
     primitive_types_list_ptr: u32,
     vertex_counts_list_ptr: u32,
 
-    draw_calls: Vec<DrawCall>,
-
     prevent_culling_flag: u8,
+    padding: [u8; 3],
+
+    // DO NOT SERIALISE
+    draw_calls: Vec<DrawCall>,
 }
 
 impl NdPushBuffer {
