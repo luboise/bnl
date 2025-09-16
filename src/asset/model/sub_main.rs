@@ -107,9 +107,13 @@ impl MeshDescriptor {
         let mut primitives = Vec::with_capacity(primitive_ptrs.len());
 
         for primitive_ptr in primitive_ptrs {
-            if let Ok(nd) = Nd::new(bytes, primitive_ptr as usize) {
-                primitives.push(nd);
-            };
+            match Nd::new(bytes, primitive_ptr as usize) {
+                Ok(nd) => primitives.push(nd),
+                Err(_) => {
+                    return Err(SubresourceError::CreationError);
+                }
+            }
+            {};
         }
 
         Ok(MeshDescriptor {

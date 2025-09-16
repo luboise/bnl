@@ -76,8 +76,10 @@ pub struct NdHeader {
 }
 
 impl NdHeader {
-    pub fn from_bytes(bytes: &[u8]) -> Result<NdHeader, NdError> {
+    pub fn from_bytes(bytes: &[u8], header_start: u32) -> Result<NdHeader, NdError> {
         let mut cur = Cursor::new(bytes);
+
+        cur.seek(SeekFrom::Start(header_start as u64))?;
 
         let name_ptr = cur.read_u32::<LittleEndian>()?;
 
@@ -97,8 +99,19 @@ impl NdHeader {
 
         let mut name_cur = cur.clone();
         name_cur.seek(SeekFrom::Start(name_ptr as u64))?;
-        let mut name = String::new();
-        name_cur.read_to_string(&mut name)?;
+
+        let mut chars = vec![];
+
+        let mut c = name_cur.read_u8()?;
+
+        while c != 0 {
+            chars.push(c);
+            c = name_cur.read_u8()?;
+        }
+
+        let name = String::from_utf8(chars).map_err(|e| {
+            NdError::CreationFailure(format!("Failed to parse nd string name\n{}", e))
+        })?;
 
         // TODO: Move this somewhere else
         let nd_type: NdType = match name.as_ref() {
@@ -150,12 +163,12 @@ pub enum Nd {
 }
 
 impl Nd {
-    pub fn new(slice: &[u8], start_offset: usize) -> Result<Nd, NdError> {
+    pub fn new(slice: &[u8], nd_start: usize) -> Result<Nd, NdError> {
         let mut cur = Cursor::new(slice);
 
-        let header = NdHeader::from_bytes(slice)?;
+        let header = NdHeader::from_bytes(slice, nd_start as u32)?;
 
-        cur.seek(SeekFrom::Start(32 + start_offset as u64))?;
+        cur.seek(SeekFrom::Start(32 + nd_start as u64))?;
 
         if let KnownUnknown::Known(nd_type) = &header.nd_type {
             match nd_type {
@@ -166,15 +179,15 @@ impl Nd {
                     let mut resource_views = Vec::with_capacity(num_resource_views as usize);
 
                     for _ in 0..num_resource_views {
-                        resource_views.push(VertexBufferResourceView::from_cursor(&mut cur));
+                        resource_views.push(VertexBufferResourceView::from_cursor(&mut cur)?);
                     }
 
-                    return Ok(Nd::VertexBuffer(NdVertexBuffer {
+                    Ok(Nd::VertexBuffer(NdVertexBuffer {
                         header,
                         resource_views_ptr,
                         num_resource_views,
-                        resource_views: vec![],
-                    }));
+                        resource_views,
+                    }))
                 }
                 KnownNdType::PushBuffer => todo!(),
             }
@@ -279,5 +292,35 @@ impl NdPushBuffer {
 impl NdNode for NdPushBuffer {
     fn header(&self) -> &NdHeader {
         &self.header
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    fn get_test_bytes() -> Vec<u8> {
+        let test_path = std::path::Path::new(file!())
+            .parent()
+            .expect("Unable to get parent directory of test.")
+            .join("test_meshes")
+            .join("test_mesh_0");
+
+        fs::read(test_path).expect("Unable to read test input.")
+    }
+
+    #[test]
+    fn nd_header() {
+        let bytes = get_test_bytes();
+        NdHeader::from_bytes(&bytes, 0x34).expect("Unable to create NdHeader");
+    }
+
+    #[test]
+    fn nd_parse_test() {
+        let bytes = get_test_bytes();
+
+        Nd::new(&bytes, 0x34).expect("Unable to create ND");
     }
 }
