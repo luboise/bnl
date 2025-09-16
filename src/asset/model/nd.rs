@@ -36,12 +36,8 @@ impl TryFrom<String> for KnownNdType {
 
     fn try_from(value: String) -> Result<Self, Self::Error> {
         match value.as_ref() {
-            "ndVertexBuffer" => {
-                return Ok(KnownNdType::VertexBuffer);
-            }
-            "ndPushBuffer" => {
-                return Ok(KnownNdType::PushBuffer);
-            }
+            "ndVertexBuffer" => Ok(KnownNdType::VertexBuffer),
+            "ndPushBuffer" => Ok(KnownNdType::PushBuffer),
             _ => Err(NdError::UnknownType),
         }
     }
@@ -234,11 +230,26 @@ impl Nd {
 
                     let mut draw_calls = Vec::with_capacity(num_draws as usize);
 
+                    // TODO: FIGURE OUT IF THIS GOES HERE
+                    let mut min = u32::MAX;
+                    let mut max = u32::MIN;
+
                     for _ in 0..num_draws as usize {
+                        let data_ptr = data_ptr_cur.read_u32::<LittleEndian>()?;
+                        let prim_type = prim_type_ptr.read_u32::<LittleEndian>()?.into();
+                        let data_size = vertex_counts_ptr.read_u32::<LittleEndian>()?;
+
+                        if data_ptr < min {
+                            min = data_ptr;
+                        }
+                        if data_ptr + data_size > max {
+                            max = data_ptr + data_size;
+                        }
+
                         draw_calls.push(DrawCall {
-                            data_ptr: data_ptr_cur.read_u32::<LittleEndian>()?,
-                            prim_type: prim_type_ptr.read_u32::<LittleEndian>()?.into(),
-                            data_size: vertex_counts_ptr.read_u32::<LittleEndian>()?,
+                            data_ptr,
+                            prim_type,
+                            data_size,
                         });
                     }
 
@@ -255,6 +266,9 @@ impl Nd {
                         //
                         prevent_culling_flag,
                         padding,
+                        //
+                        push_buffer_base: min,
+                        push_buffer_size: max - min,
 
                         draw_calls,
                     }))
@@ -277,7 +291,7 @@ impl NdNode for Nd {
 }
 
 #[repr(u8)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum VertexBufferViewType {
     Skin = 0x0,
     SkinWeight = 0x8,
@@ -395,6 +409,10 @@ impl VertexBufferResourceView {
     pub fn end(&self) -> u32 {
         self.view_start + self.view_size
     }
+
+    pub fn res_type(&self) -> VertexBufferViewType {
+        self.res_type
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -421,9 +439,9 @@ impl NdNode for NdVertexBuffer {
 
 #[derive(Debug, Clone)]
 pub struct DrawCall {
-    data_ptr: u32,
-    prim_type: D3DPrimitiveType,
-    data_size: u32,
+    pub(crate) data_ptr: u32,
+    pub(crate) prim_type: D3DPrimitiveType,
+    pub(crate) data_size: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -444,6 +462,9 @@ pub struct NdPushBuffer {
     padding: [u8; 3],
 
     // DO NOT SERIALISE
+    pub(crate) push_buffer_base: u32,
+    pub(crate) push_buffer_size: u32,
+
     draw_calls: Vec<DrawCall>,
 }
 

@@ -16,6 +16,7 @@ mod3d-gltf = "0.3.0"
 base64 = "0.22.1"
 mod3d-base = { version = "0.3.0", features = ["serde"] }
 serde_json = "1.0.145"
+gltf_writer = { version = "0.1.0", path = "../gltf_writer" }
 
 [lib]
 name = "bnl"

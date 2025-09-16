@@ -42,6 +42,7 @@ dependencies = [
  "base64",
  "bcndecode",
  "byteorder",
+ "gltf_writer",
  "indexmap",
  "miniz_oxide",
  "mod3d-base",
@@ -113,6 +114,13 @@ dependencies = [
  "num-traits",
  "serde",
  "serde_test",
+]
+
+[[package]]
+name = "gltf_writer"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

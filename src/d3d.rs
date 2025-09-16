@@ -1,3 +1,4 @@
+use mod3d_base::PrimitiveType;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 type BitCount = usize;
@@ -290,6 +291,33 @@ impl From<D3DPrimitiveType> for u32 {
             D3DPrimitiveType::Polygon => 10,
             D3DPrimitiveType::Max => 11,
             D3DPrimitiveType::Invalid => 0x7ffffff,
+        }
+    }
+}
+
+impl From<D3DPrimitiveType> for mod3d_base::PrimitiveType {
+    fn from(value: D3DPrimitiveType) -> Self {
+        match value {
+            D3DPrimitiveType::PointList => Self::Points,
+            D3DPrimitiveType::LineList => Self::LineLoop,
+            D3DPrimitiveType::LineLoop => Self::LineLoop,
+            D3DPrimitiveType::LineStrip => Self::LineStrip,
+            D3DPrimitiveType::TriangleList => Self::Triangles,
+            D3DPrimitiveType::TriangleStrip => Self::TriangleStrip,
+            D3DPrimitiveType::TriangleFan => Self::TriangleFan,
+
+            D3DPrimitiveType::QuadList
+            | D3DPrimitiveType::QuadStrip
+            | D3DPrimitiveType::Polygon
+            | D3DPrimitiveType::Max
+            | D3DPrimitiveType::Invalid
+            | D3DPrimitiveType::None => {
+                eprintln!(
+                    "Unknown primitive type encountered: {:?}. Using triangles anyway.",
+                    value
+                );
+                return Self::Triangles;
+            }
         }
     }
 }

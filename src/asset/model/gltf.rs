@@ -1,6 +1,11 @@
+use std::slice;
+
 use base64::{Engine, prelude::BASE64_STANDARD};
-use mod3d_base::BufferElementType;
-use mod3d_gltf::{BufferIndex, Gltf, GltfBuffer, GltfScene};
+use mod3d_base::{BufferElementType, VertexAttr};
+use mod3d_gltf::{
+    AccessorIndex, BufferIndex, Gltf, GltfAsset, GltfBuffer, GltfMesh, GltfNode, GltfPrimitive,
+    GltfScene, Indexable, ViewIndex,
+};
 
 use crate::{
     VirtualResource,
@@ -8,7 +13,7 @@ use crate::{
         Asset, AssetDescription, AssetParseError,
         model::{
             ModelDescriptor,
-            nd::{Nd, NdNode},
+            nd::{Nd, NdNode, VertexBufferViewType},
         },
     },
 };
@@ -21,11 +26,16 @@ pub struct GLTFModel {
     gltf: Gltf,
 }
 
-pub fn do_the_thing(
+#[derive(Debug, Clone, Default)]
+pub struct NdGltfContext {
+    positions_accessor: Option<AccessorIndex>,
+}
+
+fn insert_nd_into_gltf(
     nd_node: &Nd,
     virtual_res: &VirtualResource,
     gltf: &mut Gltf,
-    buf_index: &mut Option<BufferIndex>,
+    ctx: &mut NdGltfContext,
 ) -> Result<(), AssetParseError> {
     match nd_node {
         Nd::VertexBuffer(buf) => {
@@ -55,22 +65,87 @@ pub fn do_the_thing(
             let gb = GltfBuffer::of_base64(b64_bytes);
             let index = gltf.add_buffer(gb);
 
-            if buf_index.is_none() {
-                *buf_index = Some(index);
-            }
-
             for res_view in buf.resource_views() {
                 let bv_index = gltf.add_view(
-                    buf_index.expect("Index is None."),
+                    index,
                     res_view.start() as usize,
                     res_view.len(),
                     Some(res_view.stride() as usize),
                 );
-                res_view.add_to_gltf(gltf, bv_index)?;
+
+                if res_view.res_type() == VertexBufferViewType::Vertex {
+                    if ctx.positions_accessor.is_none() {
+                        let accessor_index = gltf.add_accessor(
+                            bv_index,
+                            0,
+                            res_view.len() as u32 / 12,
+                            BufferElementType::Float32,
+                            3,
+                        );
+
+                        ctx.positions_accessor = Some(accessor_index);
+                    }
+                }
+
+                if let Err(e) = res_view.add_to_gltf(gltf, bv_index) {
+                    eprintln!("Unable to add bv {} to gltf file.\nError: {}", bv_index, e);
+                };
             }
         }
-        Nd::PushBuffer(_buf) => {
-            println!("Pushbuffer to gltf not implemented");
+        Nd::PushBuffer(buf) => {
+            let mut mesh = GltfMesh::default();
+
+            let indices: Vec<u16> = (0u16..2000u16).collect();
+
+            let index_buffer: Vec<u8> = indices.iter().flat_map(|val| val.to_le_bytes()).collect();
+
+            let buffer_index =
+                gltf.add_buffer(GltfBuffer::of_base64(BASE64_STANDARD.encode(&index_buffer)));
+
+            let ib_view_index = gltf.add_view(buffer_index, 0, index_buffer.len(), Some(1));
+
+            buf.draw_calls().iter().for_each(|draw_call| {
+                let accessor_index = gltf.add_accessor(
+                    ib_view_index,
+                    draw_call.data_ptr - buf.push_buffer_base,
+                    draw_call.data_size / 2,
+                    mod3d_base::BufferElementType::UInt16,
+                    1,
+                );
+
+                let primitive_index = mesh.add_primitive(
+                    draw_call.prim_type.clone().into(),
+                    Some(accessor_index),
+                    None,
+                );
+
+                let primitives = mesh.primitives();
+
+                let primitive_ptr: *mut GltfPrimitive = primitives.as_ptr() as *mut GltfPrimitive;
+
+                unsafe {
+                    (*primitive_ptr).add_attribute(VertexAttr::Position, accessor_index);
+                }
+
+                /*
+                unsafe {
+                    // Cast &[Primitive] -> *const Primitive -> *mut Primitive -> &mut [Primitive]
+                    let mut primitives = slice::from_raw_parts_mut(
+                        mesh.primitives().as_ptr() as *mut GltfPrimitive,
+                        num_primitives,
+                    );
+
+                    primitives.get_mut(0).unwrap();
+                }
+                */
+            });
+
+            let mesh_index = gltf.add_mesh(mesh);
+
+            let mut node = GltfNode::default();
+            node.set_mesh(mesh_index);
+
+            let _node_index = gltf.add_node(node);
         }
         Nd::Unknown(_val) => (),
     };
@@ -78,11 +153,11 @@ pub fn do_the_thing(
     let header = nd_node.header();
 
     if let Some(child) = header.first_child() {
-        do_the_thing(&child, virtual_res, gltf, buf_index);
+        insert_nd_into_gltf(&child, virtual_res, gltf, ctx)?;
     }
 
     if let Some(next_sibling) = header.next_sibling() {
-        do_the_thing(&next_sibling, virtual_res, gltf, buf_index);
+        insert_nd_into_gltf(&next_sibling, virtual_res, gltf, ctx)?;
     }
 
     Ok(())
@@ -101,20 +176,28 @@ impl Asset for GLTFModel {
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
         let mut gltf = Gltf::default();
+        gltf.set_asset(GltfAsset::new("Idk".to_string()));
 
         for (i, mesh_desc) in descriptor.mesh_descriptors.iter().enumerate() {
             let nodes = vec![];
 
             for nd in &mesh_desc.primitives {
-                let mut buf_index: Option<BufferIndex> = None;
+                let mut ctx = NdGltfContext::default();
 
-                do_the_thing(nd, virtual_res, &mut gltf, &mut buf_index)?;
+                insert_nd_into_gltf(nd, virtual_res, &mut gltf, &mut ctx)?;
             }
 
             gltf.add_scene(GltfScene {
                 name: format!("{}_{}", description.name(), i + 1),
                 nodes,
             });
+
+            gltf.validate().map_err(|e| {
+                AssetParseError::InvalidDataViews(format!(
+                    "GLTF file was parsed, but could not validate correctly.\nError: {}",
+                    e
+                ))
+            })?;
         }
 
         Ok(Self {
@@ -139,7 +222,6 @@ impl GLTFModel {
     }
 
     pub fn to_gltf_bytes(&self) -> serde_json::Result<Vec<u8>> {
-        dbg!(&self.gltf.accessors());
-        serde_json::to_vec(&self.gltf)
+        serde_json::to_vec_pretty(&self.gltf)
     }
 }
