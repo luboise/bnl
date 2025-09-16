@@ -5,6 +5,8 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
+use mod3d_base::BufferElementType;
+use mod3d_gltf::{AccessorIndex, BufferIndex, Gltf, ViewIndex};
 
 use crate::{asset::param::KnownUnknown, d3d::D3DPrimitiveType};
 
@@ -156,10 +158,20 @@ pub enum KnownNdType {
 type NdType = KnownUnknown<KnownNdType, String>;
 
 #[derive(Debug, Clone)]
+pub(crate) struct NdUnknown {
+    header: NdHeader,
+}
+impl NdUnknown {
+    pub(crate) fn header(&self) -> &NdHeader {
+        &self.header
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Nd {
     VertexBuffer(NdVertexBuffer),
     PushBuffer(NdPushBuffer),
-    Other(),
+    Unknown(NdUnknown),
 }
 
 impl Nd {
@@ -242,7 +254,7 @@ impl Nd {
                 }
             }
         } else {
-            Ok(Nd::Other())
+            Ok(Nd::Unknown(NdUnknown { header }))
         }
     }
 }
@@ -252,20 +264,58 @@ impl NdNode for Nd {
         match self {
             Nd::VertexBuffer(val) => val.header(),
             Nd::PushBuffer(val) => val.header(),
-            Nd::Other() => todo!(),
+            Nd::Unknown(val) => val.header(),
         }
     }
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone, Copy)]
+pub enum VertexBufferViewType {
+    Skin = 0x0,
+    SkinWeight = 0x8,
+    Vertex = 0x9,
+    Unknown10 = 0xa,
+    Unknown11 = 0xb,
+    UV = 0xd,
+    Unknown14 = 0xe,
+    Unknown15 = 0xf,
+    Unknown16 = 0x10,
+    KnknownFF = 0xff,
+}
+
+impl From<u8> for VertexBufferViewType {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => Self::Skin,
+            0x8 => Self::SkinWeight,
+            0x9 => Self::Vertex,
+            0xa => Self::Unknown10,
+            0xb => Self::Unknown11,
+            0xd => Self::UV,
+            0xe => Self::Unknown14,
+            0xf => Self::Unknown15,
+            0x10 => Self::Unknown16,
+            _ => Self::KnknownFF,
+        }
+    }
+}
+
+struct GLTFViewAttribs {
+    base_type: u32,
 }
 
 #[derive(Debug, Clone)]
 pub struct VertexBufferResourceView {
     stride: u8,
-    res_type: u8,
+    res_type: VertexBufferViewType,
     unknown_u16: u16,
 
-    // 0x8
     unknown_u32_1: u32,
+
+    // 0x8
     unknown_u32_2: u32,
+    unknown_u32_3: u32,
 
     // 0x16
     view_start: u32,
@@ -276,13 +326,67 @@ impl VertexBufferResourceView {
     pub fn from_cursor(cur: &mut Cursor<&[u8]>) -> Result<Self, std::io::Error> {
         Ok(VertexBufferResourceView {
             stride: cur.read_u8()?,
-            res_type: cur.read_u8()?,
+            res_type: cur.read_u8()?.into(),
             unknown_u16: cur.read_u16::<LittleEndian>()?,
             unknown_u32_1: cur.read_u32::<LittleEndian>()?,
             unknown_u32_2: cur.read_u32::<LittleEndian>()?,
+            unknown_u32_3: cur.read_u32::<LittleEndian>()?,
             view_start: cur.read_u32::<LittleEndian>()?,
             view_size: cur.read_u32::<LittleEndian>()?,
         })
+    }
+
+    pub(crate) fn add_to_gltf(
+        &self,
+        gltf: &mut Gltf,
+        buffer_index: ViewIndex,
+    ) -> Result<AccessorIndex, std::io::Error> {
+        match self.res_type {
+            VertexBufferViewType::Vertex => {
+                let num_vertices = self.view_size / (size_of::<mod3d_base::Vec3>() as u32);
+
+                return Ok(gltf.add_accessor(
+                    buffer_index,
+                    self.view_start,
+                    num_vertices,
+                    BufferElementType::Float32,
+                    3, // 3 elements in pos
+                ));
+            }
+            VertexBufferViewType::UV
+            | VertexBufferViewType::Unknown10
+            | VertexBufferViewType::Unknown11
+            | VertexBufferViewType::SkinWeight
+            | VertexBufferViewType::Unknown14
+            | VertexBufferViewType::Unknown15
+            | VertexBufferViewType::Unknown16
+            | VertexBufferViewType::Skin
+            | VertexBufferViewType::KnknownFF => Err(std::io::Error::other(format!(
+                "VertexBufferViewType {:?} not implemented.",
+                self.res_type
+            ))),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.view_size as usize
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn stride(&self) -> u8 {
+        self.stride
+    }
+
+    pub fn start(&self) -> u32 {
+        self.view_start
+    }
+
+    pub fn end(&self) -> u32 {
+        self.view_start + self.view_size
     }
 }
 

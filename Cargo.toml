@@ -13,6 +13,9 @@ png = "0.17.16"
 texpresso = "2.0.2"
 indexmap = "2.11.0"
 mod3d-gltf = "0.3.0"
+base64 = "0.22.1"
+mod3d-base = { version = "0.3.0", features = ["serde"] }
+serde_json = "1.0.145"
 
 [lib]
 name = "bnl"
