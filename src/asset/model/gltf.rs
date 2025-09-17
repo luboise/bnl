@@ -75,13 +75,13 @@ fn insert_nd_into_gltf(
                 if res_view.res_type() == VertexBufferViewType::Vertex
                     && ctx.positions_accessor.is_none()
                 {
-                    let accessor_index = gltf.add_accessor(Accessor {
+                    let accessor_index = gltf.add_accessor(Accessor::new(
                         buffer_view_index,
-                        byte_offset: 0,
-                        data_type: AccessorDataType::F32,
-                        data_count: res_view.len() / 12,
-                        component_count: AccessorComponentCount::VEC3,
-                    });
+                        0,
+                        AccessorDataType::F32,
+                        res_view.len() / 12,
+                        AccessorComponentCount::VEC3,
+                    ));
 
                     ctx.positions_accessor = Some(accessor_index);
                 }
@@ -95,12 +95,21 @@ fn insert_nd_into_gltf(
             }
         }
         Nd::PushBuffer(buf) => {
+            let min = u32::MAX;
+            let max = u32::MIN;
+
+            // Get min offset (starting offset) from buf
+            // Get max offset based on vertex counts
+
+            for draw_call in buf.draw_calls() {}
+
+            // Get that chunk of bytes from the descriptor
+
             let mut mesh = Mesh::new("Idk Mesh".to_string());
-            let indices: Vec<u16> = (0u16..2000u16).collect();
 
-            let index_buffer: Vec<u8> = indices.iter().flat_map(|val| val.to_le_bytes()).collect();
+            let index_buffer: &Vec<u8> = &buf.buffer_bytes;
 
-            let buffer_index = gltf.add_buffer(Buffer::new(&index_buffer));
+            let buffer_index = gltf.add_buffer(Buffer::new(index_buffer));
             let ib_view_index = gltf.add_buffer_view(BufferView {
                 buffer_index,
                 byte_offset: 0,
@@ -110,13 +119,13 @@ fn insert_nd_into_gltf(
             });
 
             buf.draw_calls().iter().for_each(|draw_call| {
-                let ib_accessor_index = gltf.add_accessor(Accessor {
-                    buffer_view_index: ib_view_index,
-                    byte_offset: (draw_call.data_ptr - buf.push_buffer_base) as usize,
-                    data_count: (draw_call.data_size / 2) as usize,
-                    data_type: AccessorDataType::U16,
-                    component_count: AccessorComponentCount::SCALAR,
-                });
+                let ib_accessor_index = gltf.add_accessor(Accessor::new(
+                    ib_view_index,
+                    (draw_call.data_ptr - buf.push_buffer_base) as usize,
+                    AccessorDataType::U16,
+                    draw_call.num_vertices as usize,
+                    AccessorComponentCount::SCALAR,
+                ));
 
                 let primitive = mesh.add_primitive(Primitive {
                     indices_accessor: Some(ib_accessor_index),
@@ -198,7 +207,7 @@ impl Asset for GLTFModel {
         }
 
         gltf.prepare_for_export()
-            .map_err(AssetParseError::InvalidDataViews)?;
+            .map_err(|e| AssetParseError::InvalidDataViews(format!("{:?}", e)))?;
 
         Ok(Self {
             description: description.clone(),

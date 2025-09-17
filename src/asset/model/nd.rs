@@ -4,7 +4,7 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use gltf_writer::gltf::{Accessor, Gltf, GltfIndex};
+use gltf_writer::gltf::{Accessor, AccessorComponentCount, AccessorDataType, Gltf, GltfIndex};
 
 use crate::{asset::param::KnownUnknown, d3d::D3DPrimitiveType};
 
@@ -236,7 +236,8 @@ impl Nd {
                     for _ in 0..num_draws as usize {
                         let data_ptr = data_ptr_cur.read_u32::<LittleEndian>()?;
                         let prim_type = prim_type_ptr.read_u32::<LittleEndian>()?.into();
-                        let data_size = vertex_counts_ptr.read_u32::<LittleEndian>()?;
+                        let num_vertices = vertex_counts_ptr.read_u32::<LittleEndian>()?;
+                        let data_size = num_vertices * size_of::<u16>() as u32;
 
                         if data_ptr < min {
                             min = data_ptr;
@@ -248,9 +249,16 @@ impl Nd {
                         draw_calls.push(DrawCall {
                             data_ptr,
                             prim_type,
-                            data_size,
+                            num_vertices,
                         });
                     }
+
+                    let push_buffer_base = min;
+                    let push_buffer_size = (max - min) as usize;
+
+                    let buffer_bytes = slice
+                        [push_buffer_base as usize..push_buffer_base as usize + push_buffer_size]
+                        .to_vec();
 
                     Ok(Nd::PushBuffer(NdPushBuffer {
                         header,
@@ -266,8 +274,9 @@ impl Nd {
                         prevent_culling_flag,
                         padding,
                         //
-                        push_buffer_base: min,
-                        push_buffer_size: max - min,
+                        buffer_bytes,
+                        push_buffer_base,
+                        push_buffer_size: push_buffer_size as u32,
 
                         draw_calls,
                     }))
@@ -365,13 +374,13 @@ impl VertexBufferResourceView {
             VertexBufferViewType::Vertex => {
                 let num_vertices = self.view_size / 12;
 
-                return Ok(gltf.add_accessor(Accessor {
+                Ok(gltf.add_accessor(Accessor::new(
                     buffer_view_index,
-                    byte_offset: self.view_start as usize,
-                    data_type: gltf_writer::gltf::AccessorDataType::F32,
-                    data_count: num_vertices as usize,
-                    component_count: gltf_writer::gltf::AccessorComponentCount::VEC3,
-                }));
+                    self.view_start as usize,
+                    AccessorDataType::F32,
+                    num_vertices as usize,
+                    AccessorComponentCount::VEC3,
+                )))
             }
             VertexBufferViewType::UV
             | VertexBufferViewType::Unknown10
@@ -440,7 +449,7 @@ impl NdNode for NdVertexBuffer {
 pub struct DrawCall {
     pub(crate) data_ptr: u32,
     pub(crate) prim_type: D3DPrimitiveType,
-    pub(crate) data_size: u32,
+    pub(crate) num_vertices: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -461,6 +470,7 @@ pub struct NdPushBuffer {
     padding: [u8; 3],
 
     // DO NOT SERIALISE
+    pub(crate) buffer_bytes: Vec<u8>,
     pub(crate) push_buffer_base: u32,
     pub(crate) push_buffer_size: u32,
 
