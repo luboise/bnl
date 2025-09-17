@@ -110,7 +110,7 @@ fn insert_nd_into_gltf(
             });
 
             buf.draw_calls().iter().for_each(|draw_call| {
-                let positions_index = gltf.add_accessor(Accessor {
+                let ib_accessor_index = gltf.add_accessor(Accessor {
                     buffer_view_index: ib_view_index,
                     byte_offset: (draw_call.data_ptr - buf.push_buffer_base) as usize,
                     data_count: (draw_call.data_size / 2) as usize,
@@ -119,7 +119,7 @@ fn insert_nd_into_gltf(
                 });
 
                 let primitive = mesh.add_primitive(Primitive {
-                    indices_accessor: Some(positions_index),
+                    indices_accessor: Some(ib_accessor_index),
                     topology_type: match draw_call.prim_type.clone().try_into() {
                         Ok(val) => Some(val),
                         Err(e) => {
@@ -130,7 +130,11 @@ fn insert_nd_into_gltf(
                     attributes: Default::default(),
                 });
 
-                primitive.set_attribute(VertexAttribute::Position, positions_index);
+                if let Some(positions_accessor) = ctx.positions_accessor {
+                    primitive.set_attribute(VertexAttribute::Position, positions_accessor);
+                } else {
+                    eprintln!("No positions accessor available.");
+                }
             });
 
             let mesh_index = gltf.add_mesh(mesh);
@@ -192,6 +196,9 @@ impl Asset for GLTFModel {
             })?;
             */
         }
+
+        gltf.prepare_for_export()
+            .map_err(AssetParseError::InvalidDataViews)?;
 
         Ok(Self {
             description: description.clone(),
