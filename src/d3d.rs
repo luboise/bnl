@@ -1,4 +1,4 @@
-use mod3d_base::PrimitiveType;
+use gltf_writer::gltf::{self, GltfError};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 type BitCount = usize;
@@ -295,16 +295,18 @@ impl From<D3DPrimitiveType> for u32 {
     }
 }
 
-impl From<D3DPrimitiveType> for mod3d_base::PrimitiveType {
-    fn from(value: D3DPrimitiveType) -> Self {
+impl TryFrom<D3DPrimitiveType> for gltf::TopologyMode {
+    type Error = String;
+
+    fn try_from(value: D3DPrimitiveType) -> Result<Self, String> {
         match value {
-            D3DPrimitiveType::PointList => Self::Points,
-            D3DPrimitiveType::LineList => Self::LineLoop,
-            D3DPrimitiveType::LineLoop => Self::LineLoop,
-            D3DPrimitiveType::LineStrip => Self::LineStrip,
-            D3DPrimitiveType::TriangleList => Self::Triangles,
-            D3DPrimitiveType::TriangleStrip => Self::TriangleStrip,
-            D3DPrimitiveType::TriangleFan => Self::TriangleFan,
+            D3DPrimitiveType::PointList => Ok(Self::Points),
+            D3DPrimitiveType::LineList => Ok(Self::LineLoop),
+            D3DPrimitiveType::LineLoop => Ok(Self::LineLoop),
+            D3DPrimitiveType::LineStrip => Ok(Self::LineStrip),
+            D3DPrimitiveType::TriangleList => Ok(Self::Triangles),
+            D3DPrimitiveType::TriangleStrip => Ok(Self::TriangleStrip),
+            D3DPrimitiveType::TriangleFan => Ok(Self::TriangleFan),
 
             D3DPrimitiveType::QuadList
             | D3DPrimitiveType::QuadStrip
@@ -316,7 +318,7 @@ impl From<D3DPrimitiveType> for mod3d_base::PrimitiveType {
                     "Unknown primitive type encountered: {:?}. Using triangles anyway.",
                     value
                 );
-                return Self::Triangles;
+                Err(format!("Failed to convert {:?} into a gltf::TopologyMode.", value).to_string())
             }
         }
     }

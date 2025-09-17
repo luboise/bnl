@@ -4,8 +4,7 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use mod3d_base::BufferElementType;
-use mod3d_gltf::{AccessorIndex, Gltf, ViewIndex};
+use gltf_writer::gltf::{Accessor, Gltf, GltfIndex};
 
 use crate::{asset::param::KnownUnknown, d3d::D3DPrimitiveType};
 
@@ -360,19 +359,19 @@ impl VertexBufferResourceView {
     pub(crate) fn add_to_gltf(
         &self,
         gltf: &mut Gltf,
-        buffer_index: ViewIndex,
-    ) -> Result<AccessorIndex, std::io::Error> {
+        buffer_view_index: GltfIndex,
+    ) -> Result<GltfIndex, std::io::Error> {
         match self.res_type {
             VertexBufferViewType::Vertex => {
-                let num_vertices = self.view_size / (size_of::<mod3d_base::Vec3>() as u32);
+                let num_vertices = self.view_size / 12;
 
-                return Ok(gltf.add_accessor(
-                    buffer_index,
-                    self.view_start,
-                    num_vertices,
-                    BufferElementType::Float32,
-                    3, // 3 elements in pos
-                ));
+                return Ok(gltf.add_accessor(Accessor {
+                    buffer_view_index,
+                    byte_offset: self.view_start as usize,
+                    data_type: gltf_writer::gltf::AccessorDataType::F32,
+                    data_count: num_vertices as usize,
+                    component_count: gltf_writer::gltf::AccessorComponentCount::VEC3,
+                }));
             }
             VertexBufferViewType::UV
             | VertexBufferViewType::Unknown10

@@ -1,10 +1,7 @@
-use std::slice;
-
 use base64::{Engine, prelude::BASE64_STANDARD};
-use mod3d_base::{BufferElementType, VertexAttr};
-use mod3d_gltf::{
-    AccessorIndex, BufferIndex, Gltf, GltfAsset, GltfBuffer, GltfMesh, GltfNode, GltfPrimitive,
-    GltfScene, Indexable, ViewIndex,
+use gltf_writer::gltf::{
+    self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, Mesh, Node,
+    Primitive, VertexAttribute,
 };
 
 use crate::{
@@ -28,7 +25,8 @@ pub struct GLTFModel {
 
 #[derive(Debug, Clone, Default)]
 pub struct NdGltfContext {
-    positions_accessor: Option<AccessorIndex>,
+    gltf: Gltf,
+    positions_accessor: Option<u32>,
 }
 
 fn insert_nd_into_gltf(
@@ -59,91 +57,86 @@ fn insert_nd_into_gltf(
                 .get_bytes(min as usize, res_size)
                 .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
-            let b64_bytes = BASE64_STANDARD.encode(res_bytes);
+            // let b64_bytes = BASE64_STANDARD.encode(res_bytes);
             // .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
-            let gb = GltfBuffer::of_base64(b64_bytes);
+            let gb = Buffer::new(res_bytes);
             let index = gltf.add_buffer(gb);
 
             for res_view in buf.resource_views() {
-                let bv_index = gltf.add_view(
+                let buffer_view_index = gltf.add_buffer_view(BufferView::new(
                     index,
                     res_view.start() as usize,
                     res_view.len(),
                     Some(res_view.stride() as usize),
-                );
+                    None,
+                ));
 
-                if res_view.res_type() == VertexBufferViewType::Vertex {
-                    if ctx.positions_accessor.is_none() {
-                        let accessor_index = gltf.add_accessor(
-                            bv_index,
-                            0,
-                            res_view.len() as u32 / 12,
-                            BufferElementType::Float32,
-                            3,
-                        );
+                if res_view.res_type() == VertexBufferViewType::Vertex
+                    && ctx.positions_accessor.is_none()
+                {
+                    let accessor_index = gltf.add_accessor(Accessor {
+                        buffer_view_index,
+                        byte_offset: 0,
+                        data_type: AccessorDataType::F32,
+                        data_count: res_view.len() / 12,
+                        component_count: AccessorComponentCount::VEC3,
+                    });
 
-                        ctx.positions_accessor = Some(accessor_index);
-                    }
+                    ctx.positions_accessor = Some(accessor_index);
                 }
 
-                if let Err(e) = res_view.add_to_gltf(gltf, bv_index) {
-                    eprintln!("Unable to add bv {} to gltf file.\nError: {}", bv_index, e);
+                if let Err(e) = res_view.add_to_gltf(gltf, buffer_view_index) {
+                    eprintln!(
+                        "Unable to add bv {} to gltf file.\nError: {}",
+                        buffer_view_index, e
+                    );
                 };
             }
         }
         Nd::PushBuffer(buf) => {
-            let mut mesh = GltfMesh::default();
-
+            let mut mesh = Mesh::new("Idk Mesh".to_string());
             let indices: Vec<u16> = (0u16..2000u16).collect();
 
             let index_buffer: Vec<u8> = indices.iter().flat_map(|val| val.to_le_bytes()).collect();
 
-            let buffer_index =
-                gltf.add_buffer(GltfBuffer::of_base64(BASE64_STANDARD.encode(&index_buffer)));
-
-            let ib_view_index = gltf.add_view(buffer_index, 0, index_buffer.len(), Some(1));
+            let buffer_index = gltf.add_buffer(Buffer::new(&index_buffer));
+            let ib_view_index = gltf.add_buffer_view(BufferView {
+                buffer_index,
+                byte_offset: 0,
+                byte_length: index_buffer.len(),
+                byte_stride: None,
+                target: None,
+            });
 
             buf.draw_calls().iter().for_each(|draw_call| {
-                let accessor_index = gltf.add_accessor(
-                    ib_view_index,
-                    draw_call.data_ptr - buf.push_buffer_base,
-                    draw_call.data_size / 2,
-                    mod3d_base::BufferElementType::UInt16,
-                    1,
-                );
+                let positions_index = gltf.add_accessor(Accessor {
+                    buffer_view_index: ib_view_index,
+                    byte_offset: (draw_call.data_ptr - buf.push_buffer_base) as usize,
+                    data_count: (draw_call.data_size / 2) as usize,
+                    data_type: AccessorDataType::U16,
+                    component_count: AccessorComponentCount::SCALAR,
+                });
 
-                let primitive_index = mesh.add_primitive(
-                    draw_call.prim_type.clone().into(),
-                    Some(accessor_index),
-                    None,
-                );
+                let primitive = mesh.add_primitive(Primitive {
+                    indices_accessor: Some(positions_index),
+                    topology_type: match draw_call.prim_type.clone().try_into() {
+                        Ok(val) => Some(val),
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            None
+                        }
+                    },
+                    attributes: Default::default(),
+                });
 
-                let primitives = mesh.primitives();
-
-                let primitive_ptr: *mut GltfPrimitive = primitives.as_ptr() as *mut GltfPrimitive;
-
-                unsafe {
-                    (*primitive_ptr).add_attribute(VertexAttr::Position, accessor_index);
-                }
-
-                /*
-                unsafe {
-                    // Cast &[Primitive] -> *const Primitive -> *mut Primitive -> &mut [Primitive]
-                    let mut primitives = slice::from_raw_parts_mut(
-                        mesh.primitives().as_ptr() as *mut GltfPrimitive,
-                        num_primitives,
-                    );
-
-                    primitives.get_mut(0).unwrap();
-                }
-                */
+                primitive.set_attribute(VertexAttribute::Position, positions_index);
             });
 
             let mesh_index = gltf.add_mesh(mesh);
 
-            let mut node = GltfNode::default();
-            node.set_mesh(mesh_index);
+            let mut node = Node::new(Some("node name".to_string()));
+            node.set_mesh_index(Some(mesh_index));
 
             let _node_index = gltf.add_node(node);
         }
@@ -176,10 +169,13 @@ impl Asset for GLTFModel {
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
         let mut gltf = Gltf::default();
-        gltf.set_asset(GltfAsset::new("Idk".to_string()));
+
+        // gltf.set_asset(GltfAsset::new("Idk".to_string()));
 
         for (i, mesh_desc) in descriptor.mesh_descriptors.iter().enumerate() {
-            let nodes = vec![];
+            let scene_name = format!("{}_{}", description.name(), i + 1);
+
+            gltf.add_scene(gltf::Scene::new(scene_name));
 
             for nd in &mesh_desc.primitives {
                 let mut ctx = NdGltfContext::default();
@@ -187,17 +183,14 @@ impl Asset for GLTFModel {
                 insert_nd_into_gltf(nd, virtual_res, &mut gltf, &mut ctx)?;
             }
 
-            gltf.add_scene(GltfScene {
-                name: format!("{}_{}", description.name(), i + 1),
-                nodes,
-            });
-
+            /*
             gltf.validate().map_err(|e| {
                 AssetParseError::InvalidDataViews(format!(
                     "GLTF file was parsed, but could not validate correctly.\nError: {}",
                     e
                 ))
             })?;
+            */
         }
 
         Ok(Self {
