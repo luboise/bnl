@@ -33,7 +33,7 @@ where
 
 impl<K, U> From<U> for KnownUnknown<K, U>
 where
-    K: HasParams + TryFrom<U>,
+    K: TryFrom<U>,
     U: Clone + From<K>,
 {
     fn from(value: U) -> Self {

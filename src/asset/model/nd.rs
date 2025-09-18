@@ -30,23 +30,13 @@ pub trait NdNode {
     fn header(&self) -> &NdHeader;
 }
 
-impl TryFrom<String> for KnownNdType {
-    type Error = NdError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_ref() {
-            "ndVertexBuffer" => Ok(KnownNdType::VertexBuffer),
-            "ndPushBuffer" => Ok(KnownNdType::PushBuffer),
-            _ => Err(NdError::UnknownType),
-        }
-    }
-}
-
 impl From<KnownNdType> for String {
     fn from(value: KnownNdType) -> Self {
         match value {
             KnownNdType::VertexBuffer => "ndVertexBuffer",
             KnownNdType::PushBuffer => "ndPushBuffer",
+            KnownNdType::BGPushBuffer => "ndBGPushBuffer",
+            KnownNdType::Group => "ndGroup",
         }
         .to_string()
     }
@@ -109,12 +99,7 @@ impl NdHeader {
             NdError::CreationFailure(format!("Failed to parse nd string name\n{}", e))
         })?;
 
-        // TODO: Move this somewhere else
-        let nd_type: NdType = match name.as_ref() {
-            "ndVertexBuffer" => NdType::Known(KnownNdType::VertexBuffer),
-            "ndPushBuffer" => NdType::Known(KnownNdType::PushBuffer),
-            _ => NdType::Unknown(name),
-        };
+        let nd_type: NdType = name.into();
 
         let first_child = match first_child_ptr {
             0 => None,
@@ -151,18 +136,35 @@ impl NdHeader {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum KnownNdType {
     VertexBuffer,
     PushBuffer,
+    BGPushBuffer,
+    Group,
+}
+
+impl TryFrom<String> for KnownNdType {
+    type Error = NdError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        match value.as_ref() {
+            "ndVertexBuffer" => Ok(KnownNdType::VertexBuffer),
+            "ndPushBuffer" => Ok(KnownNdType::PushBuffer),
+            "ndBGPushBuffer" => Ok(KnownNdType::BGPushBuffer),
+            "ndGroup" => Ok(KnownNdType::Group),
+            _ => Err(NdError::UnknownType),
+        }
+    }
 }
 
 type NdType = KnownUnknown<KnownNdType, String>;
 
 #[derive(Debug, Clone)]
-pub(crate) struct NdUnknown {
+pub struct NdUnknown {
     header: NdHeader,
 }
+
 impl NdUnknown {
     pub(crate) fn header(&self) -> &NdHeader {
         &self.header
@@ -173,6 +175,8 @@ impl NdUnknown {
 pub enum Nd {
     VertexBuffer(NdVertexBuffer),
     PushBuffer(NdPushBuffer),
+    BGPushBuffer(NdBGPushBuffer),
+    Group(NdGroup),
     Unknown(NdUnknown),
 }
 
@@ -184,7 +188,7 @@ impl Nd {
 
         cur.seek(SeekFrom::Start(32 + nd_start as u64))?;
 
-        if let KnownUnknown::Known(nd_type) = &header.nd_type {
+        if let KnownUnknown::Known(nd_type) = &header.nd_type.clone() {
             match nd_type {
                 KnownNdType::VertexBuffer => {
                     let resource_views_ptr = cur.read_u32::<LittleEndian>()?;
@@ -203,7 +207,7 @@ impl Nd {
                         resource_views,
                     }))
                 }
-                KnownNdType::PushBuffer => {
+                KnownNdType::PushBuffer | KnownNdType::BGPushBuffer => {
                     let num_draws = cur.read_u32::<LittleEndian>()?;
                     let unknown_u32_1 = cur.read_u32::<LittleEndian>()?;
                     let unknown_u32_2 = cur.read_u32::<LittleEndian>()?;
@@ -260,7 +264,7 @@ impl Nd {
                         [push_buffer_base as usize..push_buffer_base as usize + push_buffer_size]
                         .to_vec();
 
-                    Ok(Nd::PushBuffer(NdPushBuffer {
+                    let push_buffer = NdPushBuffer {
                         header,
                         num_draws,
                         unknown_u32_1,
@@ -279,7 +283,24 @@ impl Nd {
                         push_buffer_size: push_buffer_size as u32,
 
                         draw_calls,
-                    }))
+                    };
+
+                    if *nd_type == KnownNdType::BGPushBuffer {
+                        let unknown_ptr_1 = cur.read_u32::<LittleEndian>()?;
+                        let unknown_ptr_2 = cur.read_u32::<LittleEndian>()?;
+
+                        Ok(Nd::BGPushBuffer(NdBGPushBuffer {
+                            push_buffer,
+                            unknown_ptr_1,
+                            unknown_ptr_2,
+                        }))
+                    } else {
+                        Ok(Nd::PushBuffer(push_buffer))
+                    }
+                }
+                KnownNdType::Group => {
+                    // NdGroup spotted
+                    Ok(Nd::Group(NdGroup { header }))
                 }
             }
         } else {
@@ -293,6 +314,8 @@ impl NdNode for Nd {
         match self {
             Nd::VertexBuffer(val) => val.header(),
             Nd::PushBuffer(val) => val.header(),
+            Nd::BGPushBuffer(val) => val.header(),
+            Nd::Group(val) => val.header(),
             Nd::Unknown(val) => val.header(),
         }
     }
@@ -484,6 +507,38 @@ impl NdPushBuffer {
 }
 
 impl NdNode for NdPushBuffer {
+    fn header(&self) -> &NdHeader {
+        &self.header
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NdBGPushBuffer {
+    push_buffer: NdPushBuffer,
+    unknown_ptr_1: u32,
+    unknown_ptr_2: u32,
+}
+
+impl NdBGPushBuffer {
+    pub fn push_buffer(&self) -> &NdPushBuffer {
+        &self.push_buffer
+    }
+}
+
+impl NdNode for NdBGPushBuffer {
+    fn header(&self) -> &NdHeader {
+        self.push_buffer.header()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NdGroup {
+    header: NdHeader,
+}
+
+impl NdGroup {}
+
+impl NdNode for NdGroup {
     fn header(&self) -> &NdHeader {
         &self.header
     }

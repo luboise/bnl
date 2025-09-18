@@ -113,7 +113,6 @@ impl MeshDescriptor {
                     return Err(SubresourceError::CreationError);
                 }
             }
-            {};
         }
 
         Ok(MeshDescriptor {

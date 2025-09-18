@@ -1,4 +1,3 @@
-use base64::{Engine, prelude::BASE64_STANDARD};
 use gltf_writer::gltf::{
     self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, Mesh, Node,
     Primitive, VertexAttribute,
@@ -95,16 +94,6 @@ fn insert_nd_into_gltf(
             }
         }
         Nd::PushBuffer(buf) => {
-            let min = u32::MAX;
-            let max = u32::MIN;
-
-            // Get min offset (starting offset) from buf
-            // Get max offset based on vertex counts
-
-            for draw_call in buf.draw_calls() {}
-
-            // Get that chunk of bytes from the descriptor
-
             let mut mesh = Mesh::new("Idk Mesh".to_string());
 
             let index_buffer: &Vec<u8> = &buf.buffer_bytes;
@@ -153,6 +142,58 @@ fn insert_nd_into_gltf(
 
             let _node_index = gltf.add_node(node);
         }
+        // TODO: Make this not be copy and pasted from push buffer
+        Nd::BGPushBuffer(bg_buf) => {
+            let buf = bg_buf.push_buffer();
+            let mut mesh = Mesh::new("Idk Mesh".to_string());
+
+            let index_buffer: &Vec<u8> = &buf.buffer_bytes;
+
+            let buffer_index = gltf.add_buffer(Buffer::new(index_buffer));
+            let ib_view_index = gltf.add_buffer_view(BufferView {
+                buffer_index,
+                byte_offset: 0,
+                byte_length: index_buffer.len(),
+                byte_stride: None,
+                target: None,
+            });
+
+            buf.draw_calls().iter().for_each(|draw_call| {
+                let ib_accessor_index = gltf.add_accessor(Accessor::new(
+                    ib_view_index,
+                    (draw_call.data_ptr - buf.push_buffer_base) as usize,
+                    AccessorDataType::U16,
+                    draw_call.num_vertices as usize,
+                    AccessorComponentCount::SCALAR,
+                ));
+
+                let primitive = mesh.add_primitive(Primitive {
+                    indices_accessor: Some(ib_accessor_index),
+                    topology_type: match draw_call.prim_type.clone().try_into() {
+                        Ok(val) => Some(val),
+                        Err(e) => {
+                            eprintln!("{}", e);
+                            None
+                        }
+                    },
+                    attributes: Default::default(),
+                });
+
+                if let Some(positions_accessor) = ctx.positions_accessor {
+                    primitive.set_attribute(VertexAttribute::Position, positions_accessor);
+                } else {
+                    eprintln!("No positions accessor available.");
+                }
+            });
+
+            let mesh_index = gltf.add_mesh(mesh);
+
+            let mut node = Node::new(Some("node name".to_string()));
+            node.set_mesh_index(Some(mesh_index));
+
+            let _node_index = gltf.add_node(node);
+        }
+        Nd::Group(_val) => {}
         Nd::Unknown(_val) => (),
     };
 
