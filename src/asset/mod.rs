@@ -2,6 +2,7 @@ use std::{
     cmp,
     fmt::{self, Display},
     io::{self, Cursor, Read, Write},
+    path::Path,
 };
 
 use crate::{
@@ -262,6 +263,14 @@ impl From<AssetParseError> for AssetError {
     fn from(err: AssetParseError) -> Self {
         AssetError::ParseError(err)
     }
+}
+
+pub trait DumpToDir: Dump {
+    fn dump_to_dir<P: AsRef<Path>>(&self, dump_dir: P) -> Result<(), std::io::Error>;
+}
+
+pub trait Dump {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error>;
 }
 
 /// Describes how a given asset is structured. Typically, an AssetDescriptor has information about how

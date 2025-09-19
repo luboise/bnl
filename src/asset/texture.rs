@@ -8,7 +8,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::{
     BNLAsset, VirtualResource, VirtualResourceError,
-    asset::{Asset, AssetDescription, AssetDescriptor, AssetParseError},
+    asset::{Asset, AssetDescription, AssetDescriptor, AssetParseError, Dump},
     d3d::{D3DFormat, LinearColour, PixelBits, StandardFormat, Swizzled},
     game::AssetType,
     images::{self},
@@ -344,8 +344,12 @@ impl Texture {
             bytes,
         })
     }
+}
 
-    pub fn dump(&self, path: &Path) -> Result<(), std::io::Error> {
+impl Dump for Texture {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
+        let path = dump_path.as_ref();
+
         let image = self.to_rgba_image()?;
 
         let file = File::create(path).unwrap();

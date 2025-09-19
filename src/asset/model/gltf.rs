@@ -1,12 +1,14 @@
+use std::path::{self, Path};
+
 use gltf_writer::gltf::{
     self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, Mesh, Node,
-    Primitive, VertexAttribute,
+    Primitive, VertexAttribute, serialisation::GltfExportType,
 };
 
 use crate::{
     VirtualResource,
     asset::{
-        Asset, AssetDescription, AssetParseError,
+        Asset, AssetDescription, AssetParseError, Dump, DumpToDir,
         model::{
             ModelDescriptor,
             nd::{Nd, NdNode, VertexBufferViewType},
@@ -200,11 +202,11 @@ fn insert_nd_into_gltf(
     let header = nd_node.header();
 
     if let Some(child) = header.first_child() {
-        insert_nd_into_gltf(&child, virtual_res, gltf, ctx)?;
+        insert_nd_into_gltf(child, virtual_res, gltf, ctx)?;
     }
 
     if let Some(next_sibling) = header.next_sibling() {
-        insert_nd_into_gltf(&next_sibling, virtual_res, gltf, ctx)?;
+        insert_nd_into_gltf(next_sibling, virtual_res, gltf, ctx)?;
     }
 
     Ok(())
@@ -273,5 +275,28 @@ impl GLTFModel {
 
     pub fn to_gltf_bytes(&self) -> serde_json::Result<Vec<u8>> {
         serde_json::to_vec_pretty(&self.gltf)
+    }
+}
+
+impl DumpToDir for GLTFModel {
+    fn dump_to_dir<P: AsRef<Path>>(&self, dump_dir: P) -> Result<(), std::io::Error> {
+        self.dump(dump_dir.as_ref().join(format!("{}.gltf", self.name())))
+    }
+}
+
+impl Dump for GLTFModel {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
+        let export_path = path::absolute(dump_path.as_ref())?;
+
+        dbg!(format!(
+            "Exporting GLTF model to absolute path {}",
+            export_path.display()
+        ));
+
+        self.gltf
+            .export(&export_path, GltfExportType::JSON)
+            .map_err(|e| std::io::Error::other(format!("Error dumping GLTF model: {:?}", e)))?;
+
+        Ok(())
     }
 }
