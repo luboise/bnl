@@ -208,13 +208,23 @@ impl Asset for Model {
             description: description.clone(),
             descriptor: descriptor.clone(),
             textures: vec![],
-            meshes: todo!(),
+            meshes: vec![],
         };
 
         for subtex_desc in &model.descriptor.texture_descriptors {
             model.textures.push(TextureData::new(
-                subtex_desc.clone().into(),
-                virtual_res.get_all_bytes(),
+                subtex_desc.clone(),
+                virtual_res
+                    .get_bytes(
+                        subtex_desc.texture_offset() as usize,
+                        subtex_desc.texture_size() as usize,
+                    )
+                    .map_err(|e| {
+                        AssetParseError::InvalidDataViews(
+                            "Unable to get section of Virtual Resource required for texture."
+                                .to_string(),
+                        )
+                    })?,
             ));
         }
 

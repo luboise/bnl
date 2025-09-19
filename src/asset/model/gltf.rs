@@ -44,11 +44,6 @@ impl Dump for GLTFModel {
     fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
         let export_path = path::absolute(dump_path.as_ref())?;
 
-        dbg!(format!(
-            "Exporting GLTF model to absolute path {}",
-            export_path.display()
-        ));
-
         self.gltf
             .export(&export_path, GltfExportType::JSON)
             .map_err(|e| std::io::Error::other(format!("Error dumping GLTF model: {:?}", e)))?;

@@ -111,6 +111,77 @@ impl TextureData {
     pub fn new(descriptor: TextureDescriptor, bytes: Vec<u8>) -> Self {
         TextureData { descriptor, bytes }
     }
+
+    pub fn to_rgba_image(&self) -> Result<Image, std::io::Error> {
+        let mut bytes: Vec<u8> = self.bytes.clone();
+
+        let desired_format: D3DFormat = match self.descriptor.format {
+            D3DFormat::Linear(LinearColour::R8G8B8A8)
+            | D3DFormat::Swizzled(Swizzled::A8B8G8R8)
+            | D3DFormat::Swizzled(Swizzled::A8R8G8B8) => D3DFormat::Linear(LinearColour::R8G8B8A8),
+            _ => D3DFormat::Linear(LinearColour::R8G8B8A8),
+        };
+
+        if desired_format != self.descriptor.format {
+            bytes = images::transcode(
+                self.descriptor.width.into(),
+                self.descriptor.height.into(),
+                self.descriptor.format,
+                desired_format,
+                bytes.as_ref(),
+            )?;
+        }
+
+        Ok(Image {
+            width: self.descriptor.width as usize,
+            height: self.descriptor.height as usize,
+            bytes,
+        })
+    }
+}
+
+impl Dump for TextureData {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
+        let path = dump_path.as_ref();
+
+        let image = self.to_rgba_image()?;
+
+        let file = File::create(path).unwrap();
+        let w = &mut BufWriter::new(file);
+
+        let mut encoder = png::Encoder::new(
+            w,
+            self.descriptor.width as u32,
+            self.descriptor.height as u32,
+        ); // Width is 2 pixels and height is 1.
+
+        // TODO: Set this per texture type
+        let use_rgba = true;
+
+        encoder.set_color(match use_rgba {
+            true => png::ColorType::Rgba,
+            false => png::ColorType::Rgb,
+        });
+        encoder.set_depth(png::BitDepth::Eight);
+
+        // encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2));
+        /*
+        let chroma = png::SourceChromaticities::new(
+            (0.3127, 0.3290), // red
+            (0.6400, 0.3300), // green
+            (0.3000, 0.6000), // blue
+            (0.1500, 0.0600), // white
+        );
+        encoder.set_source_chromaticities(chroma);
+        */
+
+        let mut writer = encoder.write_header().unwrap();
+
+        writer.write_image_data(&image.bytes)?;
+        writer.finish().expect("Unable to close writer");
+
+        Ok(())
+    }
 }
 
 impl AssetDescriptor for TextureDescriptor {
@@ -310,83 +381,13 @@ impl Texture {
     }
 
     pub fn to_rgba_image(&self) -> Result<Image, std::io::Error> {
-        let mut bytes: Vec<u8> = self.data.bytes.clone();
-
-        let desired_format: D3DFormat = match self.descriptor().format {
-            D3DFormat::Linear(LinearColour::R8G8B8A8)
-            | D3DFormat::Swizzled(Swizzled::A8B8G8R8)
-            | D3DFormat::Swizzled(Swizzled::A8R8G8B8) => D3DFormat::Linear(LinearColour::R8G8B8A8),
-            _ => {
-                /*
-                eprintln!(
-                    "Unexpected format found during dump: {:?}. Attempting to dump anyway.",
-                    self.descriptor().format
-                );
-                */
-
-                D3DFormat::Linear(LinearColour::R8G8B8A8)
-            }
-        };
-
-        if desired_format != self.descriptor().format {
-            bytes = images::transcode(
-                self.descriptor().width.into(),
-                self.descriptor().height.into(),
-                self.descriptor().format,
-                desired_format,
-                bytes.as_ref(),
-            )?;
-        }
-
-        Ok(Image {
-            width: self.descriptor().width as usize,
-            height: self.descriptor().height as usize,
-            bytes,
-        })
+        self.data.to_rgba_image()
     }
 }
 
 impl Dump for Texture {
     fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
-        let path = dump_path.as_ref();
-
-        let image = self.to_rgba_image()?;
-
-        let file = File::create(path).unwrap();
-        let w = &mut BufWriter::new(file);
-
-        let mut encoder = png::Encoder::new(
-            w,
-            self.descriptor().width as u32,
-            self.descriptor().height as u32,
-        ); // Width is 2 pixels and height is 1.
-
-        // TODO: Set this per texture type
-        let use_rgba = true;
-
-        encoder.set_color(match use_rgba {
-            true => png::ColorType::Rgba,
-            false => png::ColorType::Rgb,
-        });
-        encoder.set_depth(png::BitDepth::Eight);
-
-        // encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2));
-        /*
-        let chroma = png::SourceChromaticities::new(
-            (0.3127, 0.3290), // red
-            (0.6400, 0.3300), // green
-            (0.3000, 0.6000), // blue
-            (0.1500, 0.0600), // white
-        );
-        encoder.set_source_chromaticities(chroma);
-        */
-
-        let mut writer = encoder.write_header().unwrap();
-
-        writer.write_image_data(&image.bytes)?;
-        writer.finish().expect("Unable to close writer");
-
-        Ok(())
+        self.data.dump(dump_path)
     }
 }
 
