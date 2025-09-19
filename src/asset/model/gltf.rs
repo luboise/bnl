@@ -1,8 +1,8 @@
 use std::path::{self, Path};
 
 use gltf_writer::gltf::{
-    self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, Mesh, Node,
-    Primitive, VertexAttribute, serialisation::GltfExportType,
+    self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, GltfIndex,
+    Mesh, Node, Primitive, VertexAttribute, serialisation::GltfExportType,
 };
 
 use crate::{
@@ -24,10 +24,46 @@ pub struct GLTFModel {
     gltf: Gltf,
 }
 
+impl GLTFModel {
+    pub fn gltf(&self) -> &Gltf {
+        &self.gltf
+    }
+
+    pub fn to_gltf_bytes(&self) -> serde_json::Result<Vec<u8>> {
+        serde_json::to_vec_pretty(&self.gltf)
+    }
+}
+
+impl DumpToDir for GLTFModel {
+    fn dump_to_dir<P: AsRef<Path>>(&self, dump_dir: P) -> Result<(), std::io::Error> {
+        self.dump(dump_dir.as_ref().join(format!("{}.gltf", self.name())))
+    }
+}
+
+impl Dump for GLTFModel {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
+        let export_path = path::absolute(dump_path.as_ref())?;
+
+        dbg!(format!(
+            "Exporting GLTF model to absolute path {}",
+            export_path.display()
+        ));
+
+        self.gltf
+            .export(&export_path, GltfExportType::JSON)
+            .map_err(|e| std::io::Error::other(format!("Error dumping GLTF model: {:?}", e)))?;
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct NdGltfContext {
     gltf: Gltf,
     positions_accessor: Option<u32>,
+    uv_accessor: Option<u32>,
+
+    node_stack: Vec<GltfIndex>,
 }
 
 fn insert_nd_into_gltf(
@@ -58,9 +94,6 @@ fn insert_nd_into_gltf(
                 .get_bytes(min as usize, res_size)
                 .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
-            // let b64_bytes = BASE64_STANDARD.encode(res_bytes);
-            // .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
-
             let gb = Buffer::new(res_bytes);
             let index = gltf.add_buffer(gb);
 
@@ -85,6 +118,25 @@ fn insert_nd_into_gltf(
                     ));
 
                     ctx.positions_accessor = Some(accessor_index);
+                }
+
+                if let Err(e) = res_view.add_to_gltf(gltf, buffer_view_index) {
+                    eprintln!(
+                        "Unable to add bv {} to gltf file.\nError: {}",
+                        buffer_view_index, e
+                    );
+                } else if res_view.res_type() == VertexBufferViewType::UV
+                    && ctx.uv_accessor.is_none()
+                {
+                    let accessor_index = gltf.add_accessor(Accessor::new(
+                        buffer_view_index,
+                        0,
+                        AccessorDataType::F32,
+                        res_view.len() / 8,
+                        AccessorComponentCount::VEC2,
+                    ));
+
+                    ctx.uv_accessor = Some(accessor_index);
                 }
 
                 if let Err(e) = res_view.add_to_gltf(gltf, buffer_view_index) {
@@ -265,38 +317,5 @@ impl Asset for GLTFModel {
 
     fn as_bnl_asset(&self) -> crate::BNLAsset {
         todo!()
-    }
-}
-
-impl GLTFModel {
-    pub fn gltf(&self) -> &Gltf {
-        &self.gltf
-    }
-
-    pub fn to_gltf_bytes(&self) -> serde_json::Result<Vec<u8>> {
-        serde_json::to_vec_pretty(&self.gltf)
-    }
-}
-
-impl DumpToDir for GLTFModel {
-    fn dump_to_dir<P: AsRef<Path>>(&self, dump_dir: P) -> Result<(), std::io::Error> {
-        self.dump(dump_dir.as_ref().join(format!("{}.gltf", self.name())))
-    }
-}
-
-impl Dump for GLTFModel {
-    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
-        let export_path = path::absolute(dump_path.as_ref())?;
-
-        dbg!(format!(
-            "Exporting GLTF model to absolute path {}",
-            export_path.display()
-        ));
-
-        self.gltf
-            .export(&export_path, GltfExportType::JSON)
-            .map_err(|e| std::io::Error::other(format!("Error dumping GLTF model: {:?}", e)))?;
-
-        Ok(())
     }
 }

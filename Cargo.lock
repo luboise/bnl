@@ -41,6 +41,7 @@ dependencies = [
  "miniz_oxide",
  "num_enum",
  "png",
+ "serde",
  "serde_json",
  "texpresso",
 ]

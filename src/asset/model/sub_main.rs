@@ -126,6 +126,10 @@ impl MeshDescriptor {
             primitives,
         })
     }
+
+    pub fn primitives(&self) -> &[Nd] {
+        &self.primitives
+    }
 }
 
 #[derive(Debug)]

@@ -1,10 +1,12 @@
 use std::{
+    fmt::Display,
     io::{self, Cursor, Read, Seek, SeekFrom},
     iter::{self},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use gltf_writer::gltf::{Accessor, AccessorComponentCount, AccessorDataType, Gltf, GltfIndex};
+use serde::{Serialize, ser::SerializeMap};
 
 use crate::{asset::param::KnownUnknown, d3d::D3DPrimitiveType};
 
@@ -59,6 +61,22 @@ pub struct NdHeader {
     // DO NOT SERIALISE
     first_child: Option<Box<Nd>>,
     next_sibling: Option<Box<Nd>>,
+}
+
+impl Serialize for NdHeader {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = serializer.serialize_map(None)?;
+
+        map.serialize_entry("type", &self.nd_type.to_string())?;
+
+        let children: Vec<&Nd> = self.children().collect();
+        map.serialize_entry("children", &children)?;
+
+        map.end()
+    }
 }
 
 impl NdHeader {
@@ -127,12 +145,16 @@ impl NdHeader {
         })
     }
 
-    pub fn first_child(&self) -> Option<&Box<Nd>> {
-        self.first_child.as_ref()
+    pub fn children(&self) -> impl Iterator<Item = &Nd> {
+        iter::successors(self.first_child(), |nd| nd.header().next_sibling())
     }
 
-    pub fn next_sibling(&self) -> Option<&Box<Nd>> {
-        self.next_sibling.as_ref()
+    pub fn first_child(&self) -> Option<&Nd> {
+        self.first_child.as_deref()
+    }
+
+    pub fn next_sibling(&self) -> Option<&Nd> {
+        self.next_sibling.as_deref()
     }
 }
 
@@ -142,6 +164,17 @@ pub enum KnownNdType {
     PushBuffer,
     BGPushBuffer,
     Group,
+}
+
+impl Display for KnownNdType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KnownNdType::VertexBuffer => write!(f, "ndVertexBuffer"),
+            KnownNdType::PushBuffer => write!(f, "ndPushBuffer"),
+            KnownNdType::BGPushBuffer => write!(f, "ndBGPushBuffer"),
+            KnownNdType::Group => write!(f, "ndGroup"),
+        }
+    }
 }
 
 impl TryFrom<String> for KnownNdType {
@@ -159,6 +192,15 @@ impl TryFrom<String> for KnownNdType {
 }
 
 type NdType = KnownUnknown<KnownNdType, String>;
+
+impl ToString for NdType {
+    fn to_string(&self) -> String {
+        match self {
+            KnownUnknown::Known(val) => val.to_string(),
+            KnownUnknown::Unknown(val) => val.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct NdUnknown {
@@ -178,6 +220,15 @@ pub enum Nd {
     BGPushBuffer(NdBGPushBuffer),
     Group(NdGroup),
     Unknown(NdUnknown),
+}
+
+impl Serialize for Nd {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.header().serialize(serializer)
+    }
 }
 
 impl Nd {

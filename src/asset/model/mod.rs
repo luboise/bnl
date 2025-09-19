@@ -71,6 +71,12 @@ pub struct ModelDescriptor {
     mesh_descriptors: Vec<MeshDescriptor>,
 }
 
+impl ModelDescriptor {
+    pub fn mesh_descriptors(&self) -> &[MeshDescriptor] {
+        &self.mesh_descriptors
+    }
+}
+
 impl AssetDescriptor for ModelDescriptor {
     fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError> {
         let data_size = data.len() as u32;
