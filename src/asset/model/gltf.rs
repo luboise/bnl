@@ -2,7 +2,8 @@ use std::path::{self, Path};
 
 use gltf_writer::gltf::{
     self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, GltfIndex,
-    Mesh, Node, PBRMetallicRoughness, Primitive, VertexAttribute, serialisation::GltfExportType,
+    Mesh, Node, PBRMetallicRoughness, Primitive, Scene, VertexAttribute,
+    serialisation::GltfExportType,
 };
 
 use crate::{
@@ -60,6 +61,7 @@ pub struct NdGltfContext {
     uv_accessor: Option<GltfIndex>,
 
     current_material: Option<GltfIndex>,
+    current_scene: GltfIndex,
 
     node_stack: Vec<GltfIndex>,
 }
@@ -131,20 +133,17 @@ impl Asset for GLTFModel {
         for (i, mesh_desc) in descriptor.mesh_descriptors.iter().enumerate() {
             let scene_name = format!("{}_{}", description.name(), i + 1);
 
-            ctx.gltf.add_scene(gltf::Scene::new(scene_name));
+            let mut scene = gltf::Scene::new(scene_name);
+
+            ctx.current_scene = ctx.gltf.scenes().len() as u32;
 
             for nd in &mesh_desc.primitives {
-                insert_nd_into_gltf(nd, virtual_res, &mut ctx)?;
+                if let Some(new_index) = insert_nd_into_gltf(nd, virtual_res, &mut ctx)? {
+                    scene.add_node(new_index);
+                };
             }
 
-            /*
-            gltf.validate().map_err(|e| {
-                AssetParseError::InvalidDataViews(format!(
-                    "GLTF file was parsed, but could not validate correctly.\nError: {}",
-                    e
-                ))
-            })?;
-            */
+            ctx.gltf.add_scene(scene);
         }
 
         ctx.gltf
@@ -171,7 +170,9 @@ fn insert_nd_into_gltf(
     nd_node: &Nd,
     virtual_res: &VirtualResource,
     ctx: &mut NdGltfContext,
-) -> Result<(), AssetParseError> {
+) -> Result<Option<GltfIndex>, AssetParseError> {
+    let mut node_index = None;
+
     match nd_node {
         Nd::VertexBuffer(buf) => {
             let mut min = u32::MAX;
@@ -302,7 +303,7 @@ fn insert_nd_into_gltf(
             let mut node = Node::new(Some("node name".to_string()));
             node.set_mesh_index(Some(mesh_index));
 
-            let _node_index = ctx.gltf.add_node(node);
+            node_index = Some(ctx.gltf.add_node(node));
         }
         Nd::BGPushBuffer(bg_buf) => {
             let buf = bg_buf.push_buffer();
@@ -354,40 +355,99 @@ fn insert_nd_into_gltf(
             let mut node = Node::new(Some("node name".to_string()));
             node.set_mesh_index(Some(mesh_index));
 
-            let _node_index = ctx.gltf.add_node(node);
+            node_index = Some(ctx.gltf.add_node(node));
         }
         Nd::ShaderParam2(val) => {
             let main_attribute_map = val.main_payload().attribute_map();
 
-            if let Some(attrib) = main_attribute_map.get("colour0") {
-                let texture_index = attrib.val2;
+            let attrib_key = "colour0";
 
-                let material_index = ctx.gltf.add_material(gltf::Material {
-                    name: "Some Material".to_string(),
-                    pbr_metallic_roughness: Some(PBRMetallicRoughness {
-                        base_color_texture: Some(gltf::TextureInfo {
-                            texture_index,
-                            texcoords_accessor: ctx.uv_accessor,
-                        }),
-                    }),
-                });
+            if let Some(attrib) = main_attribute_map.get(attrib_key) {
+                main_attribute_map
+                    .get_index_of(attrib_key)
+                    .expect("Unable to find index for key that was literally just found.");
 
-                ctx.current_material = Some(material_index);
+                let texture_slot = attrib.val2;
+
+                match val
+                    .main_payload()
+                    .texture_assignments()
+                    .get(texture_slot as usize)
+                {
+                    Some(tex_assignment) => {
+                        let material_index = ctx.gltf.add_material(gltf::Material {
+                            name: "Some Material".to_string(),
+                            pbr_metallic_roughness: Some(PBRMetallicRoughness {
+                                base_color_texture: Some(gltf::TextureInfo {
+                                    texture_index: tex_assignment.texture_index,
+                                    texcoords_accessor: ctx.uv_accessor,
+                                }),
+                            }),
+                        });
+
+                        ctx.current_material = Some(material_index);
+                    }
+                    None => eprintln!(
+                        "Texture slot {} is referenced by an ndShaderParam, but the param only assigns {} slots.",
+                        texture_slot + 1,
+                        val.main_payload().texture_assignments().len()
+                    ),
+                };
             }
         }
         Nd::Group(_val) => {}
         Nd::Unknown(_val) => (),
     };
 
+    if let Some(index) = node_index {
+        ctx.node_stack.push(index);
+    }
+
     let header = nd_node.header();
 
+    // If has child, get child
     if let Some(child) = header.first_child() {
         insert_nd_into_gltf(child, virtual_res, ctx)?;
     }
+
+    /*
+    if let Some(new_child) = new_node.take() {
+        // Insert into self or parent
+        if let Some(ni) = node_index {
+            ctx.gltf
+                .nodes_mut()
+                .get_mut(ni as usize)
+                .unwrap()
+                .add_child(new_child);
+        } else {
+            match &ctx.node_stack.last() {
+                Some(last) => ctx
+                    .gltf
+                    .nodes_mut()
+                    .get_mut(**last as usize)
+                    .unwrap()
+                    .add_child(new_child),
+                None => ctx
+                    .gltf
+                    .scenes_mut()
+                    .get_mut(ctx.current_scene as usize)
+                    .unwrap()
+                    .add_node(new_child),
+            };
+        }
+    }
+
+
+    */
 
     if let Some(next_sibling) = header.next_sibling() {
         insert_nd_into_gltf(next_sibling, virtual_res, ctx)?;
     }
 
-    Ok(())
+    // Pop self from ctx when done processing
+    if node_index.is_some() {
+        ctx.node_stack.pop();
+    }
+
+    Ok(node_index)
 }

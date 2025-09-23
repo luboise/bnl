@@ -1,17 +1,16 @@
 use std::{
-    collections::HashMap,
     fmt::Display,
-    fs::read_to_string,
     io::{self, Cursor, Read, Seek, SeekFrom},
     iter::{self},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use gltf_writer::gltf::{Accessor, AccessorComponentCount, AccessorDataType, Gltf, GltfIndex};
+use indexmap::IndexMap;
 use serde::{Serialize, ser::SerializeMap};
 
 use crate::{
-    asset::{param::KnownUnknown, texture::TextureError},
+    asset::param::KnownUnknown,
     d3d::{D3DPrimitiveType, PixelShaderConstant, VertexShaderConstant},
 };
 
@@ -680,16 +679,16 @@ impl NdNode for NdGroup {
 
 #[derive(Debug, Clone)]
 pub struct TextureAssignment {
-    texture_index: u32,
-    count_1: u8,
-    count_2: u8,
-    count_3: u8,
-    skip_diffuse_texture: bool,
-    unknown_1: u32,
-    unknown_2: u32,
-    unknown_3: u32,
-    unknown_4: u32,
-    unknown_5: u32,
+    pub(crate) texture_index: u32,
+    pub(crate) count_1: u8,
+    pub(crate) count_2: u8,
+    pub(crate) count_3: u8,
+    pub(crate) skip_diffuse_texture: bool,
+    pub(crate) unknown_1: u32,
+    pub(crate) unknown_2: u32,
+    pub(crate) unknown_3: u32,
+    pub(crate) unknown_4: u32,
+    pub(crate) unknown_5: u32,
     // ORIGINAL FORMAT
     /*
        u32 textureIndex;
@@ -762,7 +761,7 @@ pub struct NdShaderParam2Payload {
     unknown_1: u32,
     next_payload: u32, // Pointer to next payload???
 
-    attribute_map: HashMap<String, AttributeValue>,
+    attribute_map: IndexMap<String, AttributeValue>,
     /*
     RawColour* pixelShaderConstants: u32 [[pointer_base("section1innersptr")]];
     u32* somePtr2: u32 [[pointer_base("section1innersptr")]];
@@ -810,7 +809,7 @@ impl NdShaderParam2Payload {
         let attributes_start = cur.read_u32::<LittleEndian>()?;
         let num_attributes = cur.read_u32::<LittleEndian>()?;
 
-        let mut attribute_map = HashMap::new();
+        let mut attribute_map = IndexMap::new();
 
         cur.seek(SeekFrom::Start(attributes_start as u64))?;
 
@@ -898,8 +897,12 @@ impl NdShaderParam2Payload {
         })
     }
 
-    pub fn attribute_map(&self) -> &HashMap<String, AttributeValue> {
+    pub fn attribute_map(&self) -> &IndexMap<String, AttributeValue> {
         &self.attribute_map
+    }
+
+    pub fn texture_assignments(&self) -> &[TextureAssignment] {
+        &self.texture_assignments
     }
 }
 
