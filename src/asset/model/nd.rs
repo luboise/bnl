@@ -456,8 +456,18 @@ impl VertexBufferResourceView {
                     AccessorComponentCount::VEC3,
                 )))
             }
-            VertexBufferViewType::UV
-            | VertexBufferViewType::Unknown10
+            VertexBufferViewType::UV => {
+                let num_vertices = self.view_size / 8;
+
+                Ok(gltf.add_accessor(Accessor::new(
+                    buffer_view_index,
+                    self.view_start as usize,
+                    AccessorDataType::F32,
+                    num_vertices as usize,
+                    AccessorComponentCount::VEC2,
+                )))
+            }
+            VertexBufferViewType::Unknown10
             | VertexBufferViewType::Unknown11
             | VertexBufferViewType::SkinWeight
             | VertexBufferViewType::Unknown14

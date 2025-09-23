@@ -2,7 +2,8 @@ use std::path::{self, Path};
 
 use gltf_writer::gltf::{
     self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, GltfIndex,
-    Mesh, Node, Primitive, VertexAttribute, serialisation::GltfExportType,
+    Material, Mesh, Node, PBRMetallicRoughness, Primitive, TextureInfo, VertexAttribute,
+    serialisation::GltfExportType,
 };
 
 use crate::{
@@ -13,6 +14,7 @@ use crate::{
             ModelDescriptor,
             nd::{Nd, NdNode, VertexBufferViewType},
         },
+        texture::TextureData,
     },
 };
 
@@ -55,10 +57,105 @@ impl Dump for GLTFModel {
 #[derive(Debug, Clone, Default)]
 pub struct NdGltfContext {
     gltf: Gltf,
-    positions_accessor: Option<u32>,
-    uv_accessor: Option<u32>,
+    positions_accessor: Option<GltfIndex>,
+    uv_accessor: Option<GltfIndex>,
 
     node_stack: Vec<GltfIndex>,
+}
+
+impl Asset for GLTFModel {
+    type Descriptor = ModelDescriptor;
+
+    fn descriptor(&self) -> &Self::Descriptor {
+        &self.descriptor
+    }
+
+    fn new(
+        description: &AssetDescription,
+        descriptor: &Self::Descriptor,
+        virtual_res: &VirtualResource,
+    ) -> Result<Self, AssetParseError> {
+        let mut gltf = Gltf::default();
+
+        // Load all textures first, because we need to assign them based on index
+        for (i, tex_desc) in descriptor.texture_descriptors.iter().enumerate() {
+            let image_bytes = virtual_res
+                .get_bytes(
+                    tex_desc.texture_offset() as usize,
+                    tex_desc.texture_size() as usize,
+                )
+                .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
+
+            let tex_data = TextureData::new(tex_desc.clone(), image_bytes);
+
+            let rgba_image = tex_data.to_rgba_image()?;
+
+            let image_index = gltf.add_image(gltf::Image {
+                uri: Some(format!("image{}.png", i)),
+                data: rgba_image.bytes().to_vec(),
+                name: format!("Image {}", i),
+                // Empty values
+                mime_type: None,
+                buffer_view_index: None,
+            });
+
+            let texture_index = gltf.add_texture(gltf::Texture {
+                image_index: Some(image_index),
+                name: format!("texture{}", i),
+            });
+        }
+
+        /*
+
+            let material_index = gltf.add_material(Material {
+                name: format!("material{}", i),
+                pbr_metallic_roughness: Some(PBRMetallicRoughness {
+                    base_color_texture: TextureInfo {
+                        texture_index,
+                        texcoords_accessor: todo!(),
+                    },
+                }),
+            });
+        */
+
+        for (i, mesh_desc) in descriptor.mesh_descriptors.iter().enumerate() {
+            let scene_name = format!("{}_{}", description.name(), i + 1);
+
+            gltf.add_scene(gltf::Scene::new(scene_name));
+
+            for nd in &mesh_desc.primitives {
+                let mut ctx = NdGltfContext::default();
+
+                insert_nd_into_gltf(nd, virtual_res, &mut gltf, &mut ctx)?;
+            }
+
+            /*
+            gltf.validate().map_err(|e| {
+                AssetParseError::InvalidDataViews(format!(
+                    "GLTF file was parsed, but could not validate correctly.\nError: {}",
+                    e
+                ))
+            })?;
+            */
+        }
+
+        gltf.prepare_for_export()
+            .map_err(|e| AssetParseError::InvalidDataViews(format!("{:?}", e)))?;
+
+        Ok(Self {
+            description: description.clone(),
+            descriptor: descriptor.clone(),
+            gltf,
+        })
+    }
+
+    fn description(&self) -> &AssetDescription {
+        &self.description
+    }
+
+    fn as_bnl_asset(&self) -> crate::BNLAsset {
+        todo!()
+    }
 }
 
 fn insert_nd_into_gltf(
@@ -182,6 +279,12 @@ fn insert_nd_into_gltf(
                 } else {
                     eprintln!("No positions accessor available.");
                 }
+
+                if let Some(uv_accessor) = ctx.uv_accessor {
+                    primitive.set_attribute(VertexAttribute::TexCoord(0), uv_accessor);
+                } else {
+                    eprintln!("No texcoords accessor available.");
+                }
             });
 
             let mesh_index = gltf.add_mesh(mesh);
@@ -257,60 +360,4 @@ fn insert_nd_into_gltf(
     }
 
     Ok(())
-}
-
-impl Asset for GLTFModel {
-    type Descriptor = ModelDescriptor;
-
-    fn descriptor(&self) -> &Self::Descriptor {
-        &self.descriptor
-    }
-
-    fn new(
-        description: &AssetDescription,
-        descriptor: &Self::Descriptor,
-        virtual_res: &VirtualResource,
-    ) -> Result<Self, AssetParseError> {
-        let mut gltf = Gltf::default();
-
-        // gltf.set_asset(GltfAsset::new("Idk".to_string()));
-
-        for (i, mesh_desc) in descriptor.mesh_descriptors.iter().enumerate() {
-            let scene_name = format!("{}_{}", description.name(), i + 1);
-
-            gltf.add_scene(gltf::Scene::new(scene_name));
-
-            for nd in &mesh_desc.primitives {
-                let mut ctx = NdGltfContext::default();
-
-                insert_nd_into_gltf(nd, virtual_res, &mut gltf, &mut ctx)?;
-            }
-
-            /*
-            gltf.validate().map_err(|e| {
-                AssetParseError::InvalidDataViews(format!(
-                    "GLTF file was parsed, but could not validate correctly.\nError: {}",
-                    e
-                ))
-            })?;
-            */
-        }
-
-        gltf.prepare_for_export()
-            .map_err(|e| AssetParseError::InvalidDataViews(format!("{:?}", e)))?;
-
-        Ok(Self {
-            description: description.clone(),
-            descriptor: descriptor.clone(),
-            gltf,
-        })
-    }
-
-    fn description(&self) -> &AssetDescription {
-        &self.description
-    }
-
-    fn as_bnl_asset(&self) -> crate::BNLAsset {
-        todo!()
-    }
 }
