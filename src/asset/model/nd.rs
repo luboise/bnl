@@ -407,29 +407,6 @@ impl Nd {
                     Ok(Nd::Group(NdGroup { header }))
                 }
                 KnownNdType::ShaderParam2 => {
-                    /*
-                    RawColour* pixelShaderConstants: u32 [[pointer_base("section1innersptr")]];
-                    u32* somePtr2: u32 [[pointer_base("section1innersptr")]];
-                    TextureAssignment* textureAssignments: u32 [[pointer_base("section1innersptr")]];
-                    u32 numTextureAssignments;
-                    u32 numBruhs;
-                    u32 numPixelShaderConstants;
-
-                    // 0x18
-                    u8 alphaReference;
-                    u8 flag1;
-                    u8 flag2;
-                    u8 someCount;
-
-                    u32 someU32_5;
-
-                    // 0x20
-                    u32* child: u32 [[pointer_base("section1innersptr")]];
-
-                    u32* assignmentsStart: u32 [[pointer_base("section1innersptr")]];
-                    u32 numAssignments;
-                        */
-
                     let main_payload_ptr = cur.read_u32::<LittleEndian>()?;
                     let sub_payload_ptr = cur.read_u32::<LittleEndian>()?;
 
@@ -737,10 +714,7 @@ impl TextureAssignment {
         let count_2 = cur.read_u8()?;
         let count_3 = cur.read_u8()?;
 
-        let skip_diffuse_texture: bool = match cur.read_u8()? {
-            0 => false,
-            _ => true,
-        };
+        let skip_diffuse_texture: bool = !matches!(cur.read_u8()?, 0);
 
         let unknown_1 = cur.read_u32::<LittleEndian>()?;
         let unknown_2 = cur.read_u32::<LittleEndian>()?;
@@ -765,13 +739,13 @@ impl TextureAssignment {
 
 #[derive(Debug, Clone)]
 pub struct AttributeValue {
-    val1: u32,
-    val2: u32,
+    pub(crate) val1: u32,
+    pub(crate) val2: u32,
 
-    sentinel1: u8,
-    sentinel2: u8,
-    sentinel3: u8,
-    sentinel4: u8,
+    pub(crate) sentinel1: u8,
+    pub(crate) sentinel2: u8,
+    pub(crate) sentinel3: u8,
+    pub(crate) sentinel4: u8,
 }
 
 #[derive(Debug, Clone)]
@@ -910,8 +884,6 @@ impl NdShaderParam2Payload {
             )?);
         }
 
-        dbg!(&attribute_map);
-
         Ok(NdShaderParam2Payload {
             vertex_shader_constants,
             pixel_shader_constants,
@@ -949,11 +921,19 @@ impl NdShaderParam2 {
     fn num_bound_textures(&self) -> usize {
         self.main_payload.texture_assignments.len()
     }
+
+    pub fn main_payload(&self) -> &NdShaderParam2Payload {
+        &self.main_payload
+    }
+
+    pub fn sub_payload(&self) -> Option<&NdShaderParam2Payload> {
+        self.sub_payload.as_ref()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use std::fs;
 
     use super::*;
 

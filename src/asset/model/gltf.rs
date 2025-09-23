@@ -2,7 +2,7 @@ use std::path::{self, Path};
 
 use gltf_writer::gltf::{
     self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, GltfIndex,
-    Mesh, Node, Primitive, VertexAttribute, serialisation::GltfExportType,
+    Mesh, Node, PBRMetallicRoughness, Primitive, VertexAttribute, serialisation::GltfExportType,
 };
 
 use crate::{
@@ -58,6 +58,8 @@ pub struct NdGltfContext {
     gltf: Gltf,
     positions_accessor: Option<GltfIndex>,
     uv_accessor: Option<GltfIndex>,
+
+    current_material: Option<GltfIndex>,
 
     node_stack: Vec<GltfIndex>,
 }
@@ -121,15 +123,18 @@ impl Asset for GLTFModel {
             });
         */
 
+        let mut ctx = NdGltfContext {
+            gltf,
+            ..Default::default()
+        };
+
         for (i, mesh_desc) in descriptor.mesh_descriptors.iter().enumerate() {
             let scene_name = format!("{}_{}", description.name(), i + 1);
 
-            gltf.add_scene(gltf::Scene::new(scene_name));
+            ctx.gltf.add_scene(gltf::Scene::new(scene_name));
 
             for nd in &mesh_desc.primitives {
-                let mut ctx = NdGltfContext::default();
-
-                insert_nd_into_gltf(nd, virtual_res, &mut gltf, &mut ctx)?;
+                insert_nd_into_gltf(nd, virtual_res, &mut ctx)?;
             }
 
             /*
@@ -142,13 +147,14 @@ impl Asset for GLTFModel {
             */
         }
 
-        gltf.prepare_for_export()
+        ctx.gltf
+            .prepare_for_export()
             .map_err(|e| AssetParseError::InvalidDataViews(format!("{:?}", e)))?;
 
         Ok(Self {
             description: description.clone(),
             descriptor: descriptor.clone(),
-            gltf,
+            gltf: ctx.gltf,
         })
     }
 
@@ -164,7 +170,6 @@ impl Asset for GLTFModel {
 fn insert_nd_into_gltf(
     nd_node: &Nd,
     virtual_res: &VirtualResource,
-    gltf: &mut Gltf,
     ctx: &mut NdGltfContext,
 ) -> Result<(), AssetParseError> {
     match nd_node {
@@ -190,10 +195,10 @@ fn insert_nd_into_gltf(
                 .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
             let gb = Buffer::new(res_bytes);
-            let index = gltf.add_buffer(gb);
+            let index = ctx.gltf.add_buffer(gb);
 
             for res_view in buf.resource_views() {
-                let buffer_view_index = gltf.add_buffer_view(BufferView::new(
+                let buffer_view_index = ctx.gltf.add_buffer_view(BufferView::new(
                     index,
                     res_view.start() as usize,
                     res_view.len(),
@@ -204,7 +209,7 @@ fn insert_nd_into_gltf(
                 if res_view.res_type() == VertexBufferViewType::Vertex
                     && ctx.positions_accessor.is_none()
                 {
-                    let accessor_index = gltf.add_accessor(Accessor::new(
+                    let accessor_index = ctx.gltf.add_accessor(Accessor::new(
                         buffer_view_index,
                         0,
                         AccessorDataType::F32,
@@ -215,7 +220,7 @@ fn insert_nd_into_gltf(
                     ctx.positions_accessor = Some(accessor_index);
                 }
 
-                if let Err(e) = res_view.add_to_gltf(gltf, buffer_view_index) {
+                if let Err(e) = res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
                     eprintln!(
                         "Unable to add bv {} to gltf file.\nError: {}",
                         buffer_view_index, e
@@ -223,7 +228,7 @@ fn insert_nd_into_gltf(
                 } else if res_view.res_type() == VertexBufferViewType::UV
                     && ctx.uv_accessor.is_none()
                 {
-                    let accessor_index = gltf.add_accessor(Accessor::new(
+                    let accessor_index = ctx.gltf.add_accessor(Accessor::new(
                         buffer_view_index,
                         0,
                         AccessorDataType::F32,
@@ -234,7 +239,7 @@ fn insert_nd_into_gltf(
                     ctx.uv_accessor = Some(accessor_index);
                 }
 
-                if let Err(e) = res_view.add_to_gltf(gltf, buffer_view_index) {
+                if let Err(e) = res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
                     eprintln!(
                         "Unable to add bv {} to gltf file.\nError: {}",
                         buffer_view_index, e
@@ -245,10 +250,12 @@ fn insert_nd_into_gltf(
         Nd::PushBuffer(buf) => {
             let mut mesh = Mesh::new("Idk Mesh".to_string());
 
+            mesh.set_material(ctx.current_material);
+
             let index_buffer: &Vec<u8> = &buf.buffer_bytes;
 
-            let buffer_index = gltf.add_buffer(Buffer::new(index_buffer));
-            let ib_view_index = gltf.add_buffer_view(BufferView {
+            let buffer_index = ctx.gltf.add_buffer(Buffer::new(index_buffer));
+            let ib_view_index = ctx.gltf.add_buffer_view(BufferView {
                 buffer_index,
                 byte_offset: 0,
                 byte_length: index_buffer.len(),
@@ -257,7 +264,7 @@ fn insert_nd_into_gltf(
             });
 
             buf.draw_calls().iter().for_each(|draw_call| {
-                let ib_accessor_index = gltf.add_accessor(Accessor::new(
+                let ib_accessor_index = ctx.gltf.add_accessor(Accessor::new(
                     ib_view_index,
                     (draw_call.data_ptr - buf.push_buffer_base) as usize,
                     AccessorDataType::U16,
@@ -290,21 +297,23 @@ fn insert_nd_into_gltf(
                 }
             });
 
-            let mesh_index = gltf.add_mesh(mesh);
+            let mesh_index = ctx.gltf.add_mesh(mesh);
 
             let mut node = Node::new(Some("node name".to_string()));
             node.set_mesh_index(Some(mesh_index));
 
-            let _node_index = gltf.add_node(node);
+            let _node_index = ctx.gltf.add_node(node);
         }
         Nd::BGPushBuffer(bg_buf) => {
             let buf = bg_buf.push_buffer();
             let mut mesh = Mesh::new("Idk Mesh".to_string());
 
+            mesh.set_material(ctx.current_material);
+
             let index_buffer: &Vec<u8> = &buf.buffer_bytes;
 
-            let buffer_index = gltf.add_buffer(Buffer::new(index_buffer));
-            let ib_view_index = gltf.add_buffer_view(BufferView {
+            let buffer_index = ctx.gltf.add_buffer(Buffer::new(index_buffer));
+            let ib_view_index = ctx.gltf.add_buffer_view(BufferView {
                 buffer_index,
                 byte_offset: 0,
                 byte_length: index_buffer.len(),
@@ -313,7 +322,7 @@ fn insert_nd_into_gltf(
             });
 
             buf.draw_calls().iter().for_each(|draw_call| {
-                let ib_accessor_index = gltf.add_accessor(Accessor::new(
+                let ib_accessor_index = ctx.gltf.add_accessor(Accessor::new(
                     ib_view_index,
                     (draw_call.data_ptr - buf.push_buffer_base) as usize,
                     AccessorDataType::U16,
@@ -340,15 +349,31 @@ fn insert_nd_into_gltf(
                 }
             });
 
-            let mesh_index = gltf.add_mesh(mesh);
+            let mesh_index = ctx.gltf.add_mesh(mesh);
 
             let mut node = Node::new(Some("node name".to_string()));
             node.set_mesh_index(Some(mesh_index));
 
-            let _node_index = gltf.add_node(node);
+            let _node_index = ctx.gltf.add_node(node);
         }
         Nd::ShaderParam2(val) => {
-            //
+            let main_attribute_map = val.main_payload().attribute_map();
+
+            if let Some(attrib) = main_attribute_map.get("colour0") {
+                let texture_index = attrib.val2;
+
+                let material_index = ctx.gltf.add_material(gltf::Material {
+                    name: "Some Material".to_string(),
+                    pbr_metallic_roughness: Some(PBRMetallicRoughness {
+                        base_color_texture: Some(gltf::TextureInfo {
+                            texture_index,
+                            texcoords_accessor: ctx.uv_accessor,
+                        }),
+                    }),
+                });
+
+                ctx.current_material = Some(material_index);
+            }
         }
         Nd::Group(_val) => {}
         Nd::Unknown(_val) => (),
@@ -357,11 +382,11 @@ fn insert_nd_into_gltf(
     let header = nd_node.header();
 
     if let Some(child) = header.first_child() {
-        insert_nd_into_gltf(child, virtual_res, gltf, ctx)?;
+        insert_nd_into_gltf(child, virtual_res, ctx)?;
     }
 
     if let Some(next_sibling) = header.next_sibling() {
-        insert_nd_into_gltf(next_sibling, virtual_res, gltf, ctx)?;
+        insert_nd_into_gltf(next_sibling, virtual_res, ctx)?;
     }
 
     Ok(())

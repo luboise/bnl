@@ -1023,9 +1023,8 @@ impl BNLFile {
             let start = asset_desc.descriptor_ptr as usize;
             let end = start + new_size;
 
-            let occupants = self.get_assets_occupying_descriptor_range(start..end);
-
-            dbg!(occupants);
+            // TODO: Actually check for overlaps
+            let _occupants = self.get_assets_occupying_descriptor_range(start..end);
 
             return Err(AssetError::ParseError(AssetParseError::InvalidDataViews(
                 "The descriptor can not grow in size. (WIP to allow descriptor growing.)"
