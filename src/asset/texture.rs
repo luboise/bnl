@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{BufWriter, Cursor},
+    io::{BufWriter, Cursor, Write},
     path::Path,
 };
 
@@ -112,7 +112,7 @@ impl TextureData {
         TextureData { descriptor, bytes }
     }
 
-    pub fn to_rgba_image(&self) -> Result<Image, std::io::Error> {
+    pub fn to_rgba_image(&self) -> Result<RGBAImage, std::io::Error> {
         let mut bytes: Vec<u8> = self.bytes.clone();
 
         let desired_format: D3DFormat = match self.descriptor.format {
@@ -132,7 +132,7 @@ impl TextureData {
             )?;
         }
 
-        Ok(Image {
+        Ok(RGBAImage {
             width: self.descriptor.width as usize,
             height: self.descriptor.height as usize,
             bytes,
@@ -141,44 +141,14 @@ impl TextureData {
 }
 
 impl Dump for TextureData {
+    // fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
     fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
         let path = dump_path.as_ref();
 
-        let image = self.to_rgba_image()?;
-
-        let file = File::create(path).unwrap();
+        let file = File::create(path)?;
         let w = &mut BufWriter::new(file);
 
-        let mut encoder = png::Encoder::new(
-            w,
-            self.descriptor.width as u32,
-            self.descriptor.height as u32,
-        ); // Width is 2 pixels and height is 1.
-
-        // TODO: Set this per texture type
-        let use_rgba = true;
-
-        encoder.set_color(match use_rgba {
-            true => png::ColorType::Rgba,
-            false => png::ColorType::Rgb,
-        });
-        encoder.set_depth(png::BitDepth::Eight);
-
-        // encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2));
-        /*
-        let chroma = png::SourceChromaticities::new(
-            (0.3127, 0.3290), // red
-            (0.6400, 0.3300), // green
-            (0.3000, 0.6000), // blue
-            (0.1500, 0.0600), // white
-        );
-        encoder.set_source_chromaticities(chroma);
-        */
-
-        let mut writer = encoder.write_header().unwrap();
-
-        writer.write_image_data(&image.bytes)?;
-        writer.finish().expect("Unable to close writer");
+        self.to_rgba_image()?.dump_png_bytes(w);
 
         Ok(())
     }
@@ -325,13 +295,13 @@ impl Asset for Texture {
 }
 
 #[derive(Clone)]
-pub struct Image {
+pub struct RGBAImage {
     width: usize,
     height: usize,
     bytes: Vec<u8>,
 }
 
-impl Image {
+impl RGBAImage {
     pub fn width(&self) -> usize {
         self.width
     }
@@ -342,6 +312,33 @@ impl Image {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub fn dump_png_bytes<W: Write>(&self, w: &mut W) -> Result<(), TextureError> {
+        let mut encoder = png::Encoder::new(w, self.width as u32, self.height as u32);
+
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+
+        // encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2));
+        /*
+        let chroma = png::SourceChromaticities::new(
+            (0.3127, 0.3290), // red
+            (0.6400, 0.3300), // green
+            (0.3000, 0.6000), // blue
+            (0.1500, 0.0600), // white
+        );
+        encoder.set_source_chromaticities(chroma);
+        */
+
+        let mut writer = encoder.write_header().unwrap();
+
+        writer
+            .write_image_data(&self.bytes)
+            .map_err(|_| TextureError::InvalidInput)?;
+        writer.finish().expect("Unable to close writer");
+
+        Ok(())
     }
 }
 
@@ -380,8 +377,12 @@ impl Texture {
         Ok(())
     }
 
-    pub fn to_rgba_image(&self) -> Result<Image, std::io::Error> {
+    pub fn to_rgba_image(&self) -> Result<RGBAImage, std::io::Error> {
         self.data.to_rgba_image()
+    }
+
+    pub fn data(&self) -> &TextureData {
+        &self.data
     }
 }
 

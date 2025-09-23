@@ -7,6 +7,9 @@ pub trait PixelBits {
     fn bits_per_pixel(&self) -> BitCount;
 }
 
+pub type PixelShaderConstant = [u8; 4];
+pub type VertexShaderConstant = [f32; 4];
+
 #[derive(Debug, Clone, Copy, PartialEq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u32)]
 pub enum LinearColour {

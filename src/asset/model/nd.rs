@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Display,
     io::{self, Cursor, Read, Seek, SeekFrom},
     iter::{self},
@@ -8,7 +9,10 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use gltf_writer::gltf::{Accessor, AccessorComponentCount, AccessorDataType, Gltf, GltfIndex};
 use serde::{Serialize, ser::SerializeMap};
 
-use crate::{asset::param::KnownUnknown, d3d::D3DPrimitiveType};
+use crate::{
+    asset::param::KnownUnknown,
+    d3d::{D3DPrimitiveType, VertexShaderConstant},
+};
 
 #[derive(Debug)]
 pub enum NdError {
@@ -38,6 +42,7 @@ impl From<KnownNdType> for String {
             KnownNdType::VertexBuffer => "ndVertexBuffer",
             KnownNdType::PushBuffer => "ndPushBuffer",
             KnownNdType::BGPushBuffer => "ndBGPushBuffer",
+            KnownNdType::ShaderParam2 => "ndShaderParam2",
             KnownNdType::Group => "ndGroup",
         }
         .to_string()
@@ -163,6 +168,7 @@ pub enum KnownNdType {
     VertexBuffer,
     PushBuffer,
     BGPushBuffer,
+    ShaderParam2,
     Group,
 }
 
@@ -172,6 +178,7 @@ impl Display for KnownNdType {
             KnownNdType::VertexBuffer => write!(f, "ndVertexBuffer"),
             KnownNdType::PushBuffer => write!(f, "ndPushBuffer"),
             KnownNdType::BGPushBuffer => write!(f, "ndBGPushBuffer"),
+            KnownNdType::ShaderParam2 => write!(f, "ndShaderParam2"),
             KnownNdType::Group => write!(f, "ndGroup"),
         }
     }
@@ -219,6 +226,7 @@ pub enum Nd {
     PushBuffer(NdPushBuffer),
     BGPushBuffer(NdBGPushBuffer),
     Group(NdGroup),
+    ShaderParam2(NdShaderParam2),
     Unknown(NdUnknown),
 }
 
@@ -353,6 +361,25 @@ impl Nd {
                     // NdGroup spotted
                     Ok(Nd::Group(NdGroup { header }))
                 }
+                KnownNdType::ShaderParam2 => {
+                    let main_payload = NdShaderParam2Payload {
+                        vertex_shader_constants: todo!(),
+                        pixel_shader_constants: todo!(),
+                        texture_assignments: todo!(),
+                        alpha_ref: todo!(),
+                        count_1: todo!(),
+                        count_2: todo!(),
+                        some_count: todo!(),
+                        unknown_1: todo!(),
+                        next_payload: todo!(),
+                        attribute_map: todo!(),
+                    };
+                    Ok(Nd::ShaderParam2(NdShaderParam2 {
+                        header,
+                        main_payload: main_payload,
+                        sub_payload: todo!(),
+                    }))
+                }
             }
         } else {
             Ok(Nd::Unknown(NdUnknown { header }))
@@ -368,6 +395,7 @@ impl NdNode for Nd {
             Nd::BGPushBuffer(val) => val.header(),
             Nd::Group(val) => val.header(),
             Nd::Unknown(val) => val.header(),
+            Nd::ShaderParam2(val) => val.header(),
         }
     }
 }
@@ -597,9 +625,104 @@ pub struct NdGroup {
     header: NdHeader,
 }
 
-impl NdGroup {}
-
 impl NdNode for NdGroup {
+    fn header(&self) -> &NdHeader {
+        &self.header
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TextureAssignment {
+    texture_index: u32,
+    count_1: u8,
+    count_2: u8,
+    count_3: u8,
+    skip_diffuse_texture: bool,
+    unknown_1: u32,
+    unknown_2: u32,
+    unknown_3: u32,
+    unknown_4: u32,
+    unknown_5: u32,
+    // ORIGINAL FORMAT
+    /*
+       u32 textureIndex;
+    u8 flag1;
+    u8 flag2;
+    u8 flag3;
+    bool skipDiffuseTexture;
+    u32 unknown3;
+    u32 unknown4;
+    u32 unknown5;
+    u32 unknown6;
+    u32 unknown7;
+    */
+}
+
+#[derive(Debug, Clone)]
+pub struct AttributeValue {
+    val1: u32,
+    val2: u32,
+
+    sentinel1: u8,
+    sentinel2: u8,
+    sentinel3: u8,
+    sentinel4: u8,
+}
+
+#[derive(Debug, Clone)]
+pub struct NdShaderParam2Payload {
+    vertex_shader_constants: Vec<VertexShaderConstant>,
+    pixel_shader_constants: Vec<[u8; 4]>,
+    texture_assignments: Vec<TextureAssignment>,
+
+    alpha_ref: u8, // Index to the alpha reference texture???
+    count_1: u8,
+    count_2: u8,
+    some_count: u8,
+
+    unknown_1: u32,
+    next_payload: u32, // Pointer to next payload???
+
+    attribute_map: HashMap<String, AttributeValue>,
+    /*
+    RawColour* pixelShaderConstants: u32 [[pointer_base("section1innersptr")]];
+    u32* somePtr2: u32 [[pointer_base("section1innersptr")]];
+    TextureAssignment* textureAssignments: u32 [[pointer_base("section1innersptr")]];
+    u32 numTextureAssignments;
+    u32 numBruhs;
+    u32 numPixelShaderConstants;
+
+    // 0x18
+    u8 alphaReference;
+    u8 flag1;
+    u8 flag2;
+    u8 someCount;
+
+    u32 someU32_5;
+
+    // 0x20
+    u32* child: u32 [[pointer_base("section1innersptr")]];
+
+    u32* assignmentsStart: u32 [[pointer_base("section1innersptr")]];
+    u32 numAssignments;
+        */
+}
+
+impl NdShaderParam2Payload {
+    pub fn attribute_map(&self) -> &HashMap<String, AttributeValue> {
+        &self.attribute_map
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NdShaderParam2 {
+    header: NdHeader,
+
+    main_payload: NdShaderParam2Payload,
+    sub_payload: Option<NdShaderParam2Payload>,
+}
+
+impl NdNode for NdShaderParam2 {
     fn header(&self) -> &NdHeader {
         &self.header
     }

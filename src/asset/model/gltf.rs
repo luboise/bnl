@@ -87,19 +87,23 @@ impl Asset for GLTFModel {
                 .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
             let tex_data = TextureData::new(tex_desc.clone(), image_bytes);
-
             let rgba_image = tex_data.to_rgba_image()?;
+
+            let mut png = vec![];
+            rgba_image
+                .dump_png_bytes(&mut png)
+                .map_err(|e| AssetParseError::InvalidDataViews(format!("{:?}", e)))?;
 
             let image_index = gltf.add_image(gltf::Image {
                 uri: Some(format!("image{}.png", i)),
-                data: rgba_image.bytes().to_vec(),
+                data: png,
                 name: format!("Image {}", i),
                 // Empty values
                 mime_type: None,
                 buffer_view_index: None,
             });
 
-            let texture_index = gltf.add_texture(gltf::Texture {
+            gltf.add_texture(gltf::Texture {
                 image_index: Some(image_index),
                 name: format!("texture{}", i),
             });
@@ -294,7 +298,6 @@ fn insert_nd_into_gltf(
 
             let _node_index = gltf.add_node(node);
         }
-        // TODO: Make this not be copy and pasted from push buffer
         Nd::BGPushBuffer(bg_buf) => {
             let buf = bg_buf.push_buffer();
             let mut mesh = Mesh::new("Idk Mesh".to_string());
@@ -344,6 +347,9 @@ fn insert_nd_into_gltf(
             node.set_mesh_index(Some(mesh_index));
 
             let _node_index = gltf.add_node(node);
+        }
+        Nd::ShaderParam2(val) => {
+            //
         }
         Nd::Group(_val) => {}
         Nd::Unknown(_val) => (),
