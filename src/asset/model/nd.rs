@@ -11,7 +11,7 @@ use gltf_writer::gltf::{Accessor, AccessorComponentCount, AccessorDataType, Gltf
 use serde::{Serialize, ser::SerializeMap};
 
 use crate::{
-    asset::param::KnownUnknown,
+    asset::{param::KnownUnknown, texture::TextureError},
     d3d::{D3DPrimitiveType, PixelShaderConstant, VertexShaderConstant},
 };
 
@@ -272,6 +272,13 @@ impl<'a> ModelSlice<'a> {
             slice: self.slice,
             read_start,
         }
+    }
+
+    pub fn new_cursor(&self) -> Cursor<&[u8]> {
+        let mut cur = Cursor::new(self.slice);
+        cur.seek(SeekFrom::Start(self.read_start as u64)).unwrap();
+
+        cur
     }
 }
 
@@ -721,6 +728,41 @@ pub struct TextureAssignment {
     */
 }
 
+impl TextureAssignment {
+    fn from_model_slice(model_slice: ModelSlice) -> Result<Self, std::io::Error> {
+        let mut cur = model_slice.new_cursor();
+
+        let texture_index = cur.read_u32::<LittleEndian>()?;
+        let count_1 = cur.read_u8()?;
+        let count_2 = cur.read_u8()?;
+        let count_3 = cur.read_u8()?;
+
+        let skip_diffuse_texture: bool = match cur.read_u8()? {
+            0 => false,
+            _ => true,
+        };
+
+        let unknown_1 = cur.read_u32::<LittleEndian>()?;
+        let unknown_2 = cur.read_u32::<LittleEndian>()?;
+        let unknown_3 = cur.read_u32::<LittleEndian>()?;
+        let unknown_4 = cur.read_u32::<LittleEndian>()?;
+        let unknown_5 = cur.read_u32::<LittleEndian>()?;
+
+        Ok(Self {
+            texture_index,
+            count_1,
+            count_2,
+            count_3,
+            skip_diffuse_texture,
+            unknown_1,
+            unknown_2,
+            unknown_3,
+            unknown_4,
+            unknown_5,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AttributeValue {
     val1: u32,
@@ -860,7 +902,13 @@ impl NdShaderParam2Payload {
             .map(|chunk| chunk.try_into().unwrap())
             .collect();
 
-        let texture_assignments = vec![];
+        let mut texture_assignments = vec![];
+
+        for _ in 0..num_texture_assignments {
+            texture_assignments.push(TextureAssignment::from_model_slice(
+                model_slice.at(texture_assignments_start as usize),
+            )?);
+        }
 
         dbg!(&attribute_map);
 
