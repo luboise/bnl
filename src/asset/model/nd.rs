@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::Display,
+    fs::read_to_string,
     io::{self, Cursor, Read, Seek, SeekFrom},
     iter::{self},
 };
@@ -11,7 +12,7 @@ use serde::{Serialize, ser::SerializeMap};
 
 use crate::{
     asset::param::KnownUnknown,
-    d3d::{D3DPrimitiveType, VertexShaderConstant},
+    d3d::{D3DPrimitiveType, PixelShaderConstant, VertexShaderConstant},
 };
 
 #[derive(Debug)]
@@ -126,12 +127,24 @@ impl NdHeader {
 
         let first_child = match first_child_ptr {
             0 => None,
-            _ => Some(Nd::new(bytes, first_child_ptr as usize)?.into()),
+            _ => Some(
+                Nd::new(ModelSlice {
+                    slice: bytes,
+                    read_start: first_child_ptr as usize,
+                })?
+                .into(),
+            ),
         };
 
         let next_sibling = match next_sibling_ptr {
             0 => None,
-            _ => Some(Nd::new(bytes, next_sibling_ptr as usize)?.into()),
+            _ => Some(
+                Nd::new(ModelSlice {
+                    slice: bytes,
+                    read_start: next_sibling_ptr as usize,
+                })?
+                .into(),
+            ),
         };
 
         Ok(NdHeader {
@@ -192,6 +205,7 @@ impl TryFrom<String> for KnownNdType {
             "ndVertexBuffer" => Ok(KnownNdType::VertexBuffer),
             "ndPushBuffer" => Ok(KnownNdType::PushBuffer),
             "ndBGPushBuffer" => Ok(KnownNdType::BGPushBuffer),
+            "ndShaderParam2" => Ok(KnownNdType::ShaderParam2),
             "ndGroup" => Ok(KnownNdType::Group),
             _ => Err(NdError::UnknownType),
         }
@@ -239,13 +253,37 @@ impl Serialize for Nd {
     }
 }
 
+pub struct ModelSlice<'a> {
+    pub(crate) slice: &'a [u8],
+    pub(crate) read_start: usize,
+}
+
+impl<'a> ModelSlice<'a> {
+    pub fn slice(&self) -> &'a [u8] {
+        self.slice
+    }
+
+    pub fn nd_start(&self) -> usize {
+        self.read_start
+    }
+
+    pub fn at(&self, read_start: usize) -> Self {
+        ModelSlice {
+            slice: self.slice,
+            read_start,
+        }
+    }
+}
+
 impl Nd {
-    pub fn new(slice: &[u8], nd_start: usize) -> Result<Nd, NdError> {
+    pub fn new(model_slice: ModelSlice) -> Result<Nd, NdError> {
+        let slice = model_slice.slice();
+
         let mut cur = Cursor::new(slice);
 
-        let header = NdHeader::from_bytes(slice, nd_start as u32)?;
+        let header = NdHeader::from_bytes(slice, model_slice.read_start as u32)?;
 
-        cur.seek(SeekFrom::Start(32 + nd_start as u64))?;
+        cur.seek(SeekFrom::Start(32 + model_slice.read_start as u64))?;
 
         if let KnownUnknown::Known(nd_type) = &header.nd_type.clone() {
             match nd_type {
@@ -362,22 +400,47 @@ impl Nd {
                     Ok(Nd::Group(NdGroup { header }))
                 }
                 KnownNdType::ShaderParam2 => {
-                    let main_payload = NdShaderParam2Payload {
-                        vertex_shader_constants: todo!(),
-                        pixel_shader_constants: todo!(),
-                        texture_assignments: todo!(),
-                        alpha_ref: todo!(),
-                        count_1: todo!(),
-                        count_2: todo!(),
-                        some_count: todo!(),
-                        unknown_1: todo!(),
-                        next_payload: todo!(),
-                        attribute_map: todo!(),
+                    /*
+                    RawColour* pixelShaderConstants: u32 [[pointer_base("section1innersptr")]];
+                    u32* somePtr2: u32 [[pointer_base("section1innersptr")]];
+                    TextureAssignment* textureAssignments: u32 [[pointer_base("section1innersptr")]];
+                    u32 numTextureAssignments;
+                    u32 numBruhs;
+                    u32 numPixelShaderConstants;
+
+                    // 0x18
+                    u8 alphaReference;
+                    u8 flag1;
+                    u8 flag2;
+                    u8 someCount;
+
+                    u32 someU32_5;
+
+                    // 0x20
+                    u32* child: u32 [[pointer_base("section1innersptr")]];
+
+                    u32* assignmentsStart: u32 [[pointer_base("section1innersptr")]];
+                    u32 numAssignments;
+                        */
+
+                    let main_payload_ptr = cur.read_u32::<LittleEndian>()?;
+                    let sub_payload_ptr = cur.read_u32::<LittleEndian>()?;
+
+                    let main_payload = NdShaderParam2Payload::from_model_slice(
+                        &model_slice.at(main_payload_ptr as usize),
+                    )?;
+
+                    let sub_payload = match sub_payload_ptr {
+                        0 => None,
+                        val => Some(NdShaderParam2Payload::from_model_slice(
+                            &model_slice.at(val as usize),
+                        )?),
                     };
+
                     Ok(Nd::ShaderParam2(NdShaderParam2 {
                         header,
-                        main_payload: main_payload,
-                        sub_payload: todo!(),
+                        main_payload,
+                        sub_payload,
                     }))
                 }
             }
@@ -709,6 +772,112 @@ pub struct NdShaderParam2Payload {
 }
 
 impl NdShaderParam2Payload {
+    pub fn from_model_slice(model_slice: &ModelSlice) -> Result<Self, NdError> {
+        let mut cur = Cursor::new(model_slice.slice);
+
+        cur.seek(SeekFrom::Start(model_slice.read_start as u64))?;
+
+        let pixel_shader_constants_start = cur.read_u32::<LittleEndian>()?;
+        let vertex_shader_constants_start = cur.read_u32::<LittleEndian>()?;
+        let texture_assignments_start = cur.read_u32::<LittleEndian>()?;
+        let num_texture_assignments = cur.read_u32::<LittleEndian>()?;
+        let num_vertex_shader_constants = cur.read_u32::<LittleEndian>()?;
+        let num_pixel_shader_constants = cur.read_u32::<LittleEndian>()?;
+
+        let alpha_ref = cur.read_u8()?;
+        let count_1 = cur.read_u8()?;
+        let count_2 = cur.read_u8()?;
+        let some_count = cur.read_u8()?;
+
+        let unknown_1 = cur.read_u32::<LittleEndian>()?;
+        let next_payload_start = cur.read_u32::<LittleEndian>()?;
+        let attributes_start = cur.read_u32::<LittleEndian>()?;
+        let num_attributes = cur.read_u32::<LittleEndian>()?;
+
+        let mut attribute_map = HashMap::new();
+
+        cur.seek(SeekFrom::Start(attributes_start as u64))?;
+
+        for _ in 0..num_attributes {
+            let name_ptr = cur.read_u32::<LittleEndian>()?;
+            let val1 = cur.read_u32::<LittleEndian>()?;
+            let val2 = cur.read_u32::<LittleEndian>()?;
+
+            let sentinel1 = cur.read_u8()?;
+            let sentinel2 = cur.read_u8()?;
+            let sentinel3 = cur.read_u8()?;
+            let sentinel4 = cur.read_u8()?;
+
+            let mut name_cur = cur.clone();
+            name_cur.seek(SeekFrom::Start(name_ptr as u64))?;
+
+            let utf8_chars: Vec<u8> = name_cur
+                .bytes()
+                .map(|b| b.unwrap())
+                .take_while(|b| *b != 0)
+                .collect();
+
+            let name = String::from_utf8(utf8_chars)
+                .map_err(|e| NdError::CreationFailure(e.to_string()))?;
+
+            if let Some(old_val) = attribute_map.insert(
+                name.clone(),
+                AttributeValue {
+                    val1,
+                    val2,
+                    sentinel1,
+                    sentinel2,
+                    sentinel3,
+                    sentinel4,
+                },
+            ) {
+                println!(
+                    "Overriding old entry in attribute map.\n{}: {:?}",
+                    name, old_val
+                );
+            }
+        }
+
+        let vertex_constants_slice = &model_slice.slice[vertex_shader_constants_start as usize..];
+        let vertex_shader_constants: Vec<VertexShaderConstant> = vertex_constants_slice
+            .chunks_exact(size_of::<VertexShaderConstant>())
+            .take(num_vertex_shader_constants as usize)
+            .map(|chunk| {
+                let mut constant: VertexShaderConstant = [0.0, 0.0, 0.0, 0.0];
+
+                chunk.chunks_exact(4).enumerate().for_each(|(i, ch)| {
+                    constant[i] = f32::from_le_bytes(ch.try_into().unwrap());
+                });
+
+                constant
+            })
+            .collect();
+
+        let pixel_constants_slice = &model_slice.slice[pixel_shader_constants_start as usize..];
+        let pixel_shader_constants: Vec<PixelShaderConstant> = pixel_constants_slice
+            .chunks_exact(size_of::<PixelShaderConstant>())
+            .take(num_pixel_shader_constants as usize)
+            .map(|chunk| chunk.try_into().unwrap())
+            .collect();
+
+        let texture_assignments = vec![];
+
+        dbg!(&attribute_map);
+
+        Ok(NdShaderParam2Payload {
+            vertex_shader_constants,
+            pixel_shader_constants,
+            texture_assignments,
+            alpha_ref,
+            count_1,
+            count_2,
+            some_count,
+            unknown_1,
+            next_payload: next_payload_start,
+            attribute_map,
+        })
+    }
+
     pub fn attribute_map(&self) -> &HashMap<String, AttributeValue> {
         &self.attribute_map
     }
@@ -728,9 +897,15 @@ impl NdNode for NdShaderParam2 {
     }
 }
 
+impl NdShaderParam2 {
+    fn num_bound_textures(&self) -> usize {
+        self.main_payload.texture_assignments.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, path::Path};
 
     use super::*;
 
@@ -744,6 +919,16 @@ mod tests {
         fs::read(test_path).expect("Unable to read test input.")
     }
 
+    fn get_test_file(filename: &str) -> Vec<u8> {
+        let test_path = std::path::Path::new(file!())
+            .parent()
+            .expect("Unable to get parent directory of test.")
+            .join("test_meshes")
+            .join(filename);
+
+        fs::read(&test_path).expect("Unable to get test file")
+    }
+
     #[test]
     fn nd_header() {
         let bytes = get_test_bytes();
@@ -754,6 +939,40 @@ mod tests {
     fn nd_parse_test() {
         let bytes = get_test_bytes();
 
-        Nd::new(&bytes, 0x34).expect("Unable to create ND");
+        Nd::new(ModelSlice {
+            slice: &bytes,
+            read_start: 0x34,
+        })
+        .expect("Unable to create ND");
+    }
+
+    #[test]
+    fn nd_shader_param2() {
+        let bytes = get_test_file("test_ndShaderParam2_1");
+
+        let nd = Nd::new(ModelSlice {
+            slice: &bytes,
+            read_start: 0,
+        })
+        .expect("Unable to create ND");
+
+        if let Nd::ShaderParam2(sp2) = nd {
+            let attribute_map = &sp2.main_payload.attribute_map;
+
+            assert_eq!(attribute_map.len(), 2, "Attribute map is wrong size.");
+
+            assert_eq!(
+                sp2.num_bound_textures(),
+                2,
+                "Number of bound textures is wrong."
+            );
+
+            assert_eq!(attribute_map.len(), 2, "Attribute map is wrong size.");
+        } else {
+            panic!(
+                "nd has wrong type {:?}, expected ndShaderParam2.",
+                dbg!(&nd)
+            );
+        }
     }
 }

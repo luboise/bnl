@@ -1,7 +1,7 @@
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{self, Cursor, Read, Seek, SeekFrom};
 
-use crate::asset::model::nd::Nd;
+use crate::asset::model::nd::{ModelSlice, Nd};
 
 #[derive(Debug)]
 pub enum SubresourceError {
@@ -43,7 +43,10 @@ impl Mesh {
         let mut primitives = Vec::with_capacity(primitive_ptrs.len());
 
         for primitive_ptr in primitive_ptrs {
-            if let Ok(nd) = Nd::new(bytes, primitive_ptr as usize) {
+            if let Ok(nd) = Nd::new(ModelSlice {
+                slice: bytes,
+                read_start: primitive_ptr as usize,
+            }) {
                 primitives.push(nd);
             };
         }
@@ -107,7 +110,10 @@ impl MeshDescriptor {
         let mut primitives = Vec::with_capacity(primitive_ptrs.len());
 
         for primitive_ptr in primitive_ptrs {
-            match Nd::new(bytes, primitive_ptr as usize) {
+            match Nd::new(ModelSlice {
+                slice: bytes,
+                read_start: primitive_ptr as usize,
+            }) {
                 Ok(nd) => primitives.push(nd),
                 Err(_) => {
                     return Err(SubresourceError::CreationError);

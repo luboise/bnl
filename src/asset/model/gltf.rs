@@ -2,8 +2,7 @@ use std::path::{self, Path};
 
 use gltf_writer::gltf::{
     self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, GltfIndex,
-    Material, Mesh, Node, PBRMetallicRoughness, Primitive, TextureInfo, VertexAttribute,
-    serialisation::GltfExportType,
+    Mesh, Node, Primitive, VertexAttribute, serialisation::GltfExportType,
 };
 
 use crate::{
