@@ -5,12 +5,15 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use gltf_writer::gltf::{Accessor, AccessorComponentCount, AccessorDataType, Gltf, GltfIndex};
+use gltf_writer::gltf::{
+    self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, GltfIndex,
+};
 use indexmap::IndexMap;
 use serde::{Serialize, ser::SerializeMap};
 
 use crate::{
-    asset::param::KnownUnknown,
+    VirtualResource,
+    asset::{AssetParseError, model::gltf::NdGltfContext, param::KnownUnknown},
     d3d::{D3DPrimitiveType, PixelShaderConstant, VertexShaderConstant},
 };
 
@@ -34,6 +37,48 @@ pub trait NdNode {
     }
 
     fn header(&self) -> &NdHeader;
+
+    fn add_gltf_node(
+        &self,
+        virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError>;
+
+    fn insert_into_gltf_heirarchy(
+        &self,
+        virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        let node_index_opt = self.add_gltf_node(virtual_res, ctx)?;
+
+        /*
+        let mut parent = GltfIndex::MAX;
+        let mut grandparent: Option<GltfIndex> = Some(GltfIndex::MAX);
+        */
+
+        if let Some(node_index) = node_index_opt {
+            ctx.node_stack.push(node_index);
+
+            /*
+            grandparent = ctx.node_stack.last().copied();
+            parent = node_index;
+            */
+        } else {
+        }
+
+        if let Some(child) = self.header().first_child() {
+            child.add_gltf_node(virtual_res, ctx)?;
+        }
+        if let Some(next_sibling) = self.header().next_sibling() {
+            next_sibling.add_gltf_node(virtual_res, ctx)?;
+        }
+
+        if node_index_opt.is_some() {
+            ctx.node_stack.pop();
+        }
+
+        Ok(node_index_opt)
+    }
 }
 
 impl From<KnownNdType> for String {
@@ -227,6 +272,20 @@ pub struct NdUnknown {
     header: NdHeader,
 }
 
+impl NdNode for NdUnknown {
+    fn header(&self) -> &NdHeader {
+        &self.header
+    }
+
+    fn add_gltf_node(
+        &self,
+        _virtual_res: &VirtualResource,
+        _ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        Ok(None)
+    }
+}
+
 impl NdUnknown {
     pub(crate) fn header(&self) -> &NdHeader {
         &self.header
@@ -241,6 +300,34 @@ pub enum Nd {
     Group(NdGroup),
     ShaderParam2(NdShaderParam2),
     Unknown(NdUnknown),
+}
+
+impl NdNode for Nd {
+    fn header(&self) -> &NdHeader {
+        match self {
+            Nd::VertexBuffer(val) => val.header(),
+            Nd::PushBuffer(val) => val.header(),
+            Nd::BGPushBuffer(val) => val.header(),
+            Nd::Group(val) => val.header(),
+            Nd::Unknown(val) => val.header(),
+            Nd::ShaderParam2(val) => val.header(),
+        }
+    }
+
+    fn add_gltf_node(
+        &self,
+        virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        match self {
+            Nd::VertexBuffer(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
+            Nd::PushBuffer(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
+            Nd::BGPushBuffer(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
+            Nd::Group(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
+            Nd::ShaderParam2(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
+            Nd::Unknown(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
+        }
+    }
 }
 
 /*
@@ -435,19 +522,6 @@ impl Nd {
     }
 }
 
-impl NdNode for Nd {
-    fn header(&self) -> &NdHeader {
-        match self {
-            Nd::VertexBuffer(val) => val.header(),
-            Nd::PushBuffer(val) => val.header(),
-            Nd::BGPushBuffer(val) => val.header(),
-            Nd::Group(val) => val.header(),
-            Nd::Unknown(val) => val.header(),
-            Nd::ShaderParam2(val) => val.header(),
-        }
-    }
-}
-
 #[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy, Serialize)]
 pub enum VertexBufferViewType {
@@ -603,6 +677,87 @@ impl NdNode for NdVertexBuffer {
     fn header(&self) -> &NdHeader {
         &self.header
     }
+
+    fn add_gltf_node(
+        &self,
+        virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        let mut min = u32::MAX;
+        let mut max = u32::MIN;
+
+        // Get the size of the buffer
+        self.resource_views().iter().for_each(|view| {
+            if view.start() < min {
+                min = view.start();
+            }
+
+            if view.end() > max {
+                max = view.end();
+            }
+        });
+
+        let res_size = (max - min) as usize;
+
+        let res_bytes = virtual_res
+            .get_bytes(min as usize, res_size)
+            .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
+
+        let gb = Buffer::new(res_bytes);
+        let buffer_index = ctx.gltf.add_buffer(gb);
+
+        for res_view in self.resource_views() {
+            let buffer_view_index = ctx.gltf.add_buffer_view(gltf::BufferView::new(
+                buffer_index,
+                res_view.start() as usize,
+                res_view.len(),
+                Some(res_view.stride() as usize),
+                None,
+            ));
+
+            if res_view.res_type() == VertexBufferViewType::Vertex
+                && ctx.positions_accessor.is_none()
+            {
+                let accessor_index = ctx.gltf.add_accessor(Accessor::new(
+                    buffer_view_index,
+                    0,
+                    AccessorDataType::F32,
+                    res_view.len() / 12,
+                    AccessorComponentCount::VEC3,
+                ));
+
+                ctx.positions_accessor = Some(accessor_index);
+            }
+
+            if let Err(e) = res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
+                eprintln!(
+                    "Unable to add bv {} to gltf file.\nError: {}",
+                    buffer_view_index, e
+                );
+
+                return Ok(None);
+            } else if res_view.res_type() == VertexBufferViewType::UV && ctx.uv_accessor.is_none() {
+                let accessor_index = ctx.gltf.add_accessor(Accessor::new(
+                    buffer_view_index,
+                    0,
+                    AccessorDataType::F32,
+                    res_view.len() / 8,
+                    AccessorComponentCount::VEC2,
+                ));
+
+                ctx.uv_accessor = Some(accessor_index);
+            }
+
+            if let Err(e) = res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
+                eprintln!(
+                    "Unable to add bv {} to gltf file.\nError: {}",
+                    buffer_view_index, e
+                );
+            };
+        }
+
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -648,6 +803,68 @@ impl NdNode for NdPushBuffer {
     fn header(&self) -> &NdHeader {
         &self.header
     }
+
+    fn add_gltf_node(
+        &self,
+        virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        let mut mesh = gltf::Mesh::new("Idk Mesh".to_string());
+
+        let index_buffer: &Vec<u8> = &self.buffer_bytes;
+
+        let buffer_index = ctx.gltf.add_buffer(Buffer::new(index_buffer));
+        let ib_view_index = ctx.gltf.add_buffer_view(BufferView {
+            buffer_index,
+            byte_offset: 0,
+            byte_length: index_buffer.len(),
+            byte_stride: None,
+            target: None,
+        });
+
+        self.draw_calls().iter().for_each(|draw_call| {
+            let ib_accessor_index = ctx.gltf.add_accessor(Accessor::new(
+                ib_view_index,
+                (draw_call.data_ptr - self.push_buffer_base) as usize,
+                AccessorDataType::U16,
+                draw_call.num_vertices as usize,
+                AccessorComponentCount::SCALAR,
+            ));
+
+            let primitive = mesh.add_primitive(gltf::Primitive {
+                indices_accessor: Some(ib_accessor_index),
+                topology_type: match draw_call.prim_type.clone().try_into() {
+                    Ok(val) => Some(val),
+                    Err(e) => {
+                        eprintln!("{}", e);
+                        None
+                    }
+                },
+
+                material: ctx.current_material,
+                attributes: Default::default(),
+            });
+
+            if let Some(positions_accessor) = ctx.positions_accessor {
+                primitive.set_attribute(gltf::VertexAttribute::Position, positions_accessor);
+            } else {
+                eprintln!("No positions accessor available.");
+            }
+
+            if let Some(uv_accessor) = ctx.uv_accessor {
+                primitive.set_attribute(gltf::VertexAttribute::TexCoord(0), uv_accessor);
+            } else {
+                eprintln!("No texcoords accessor available.");
+            }
+        });
+
+        let mesh_index = ctx.gltf.add_mesh(mesh);
+
+        let mut node = gltf::Node::new(Some("node name".to_string()));
+        node.set_mesh_index(Some(mesh_index));
+
+        Ok(Some(ctx.gltf.add_node(node)))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -667,6 +884,15 @@ impl NdNode for NdBGPushBuffer {
     fn header(&self) -> &NdHeader {
         self.push_buffer.header()
     }
+
+    fn add_gltf_node(
+        &self,
+        virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        let push_buffer = self.push_buffer();
+        push_buffer.insert_into_gltf_heirarchy(virtual_res, ctx)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -677,6 +903,17 @@ pub struct NdGroup {
 impl NdNode for NdGroup {
     fn header(&self) -> &NdHeader {
         &self.header
+    }
+
+    fn add_gltf_node(
+        &self,
+        _virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        Ok(Some(
+            ctx.gltf
+                .add_node(gltf::Node::new(Some("ndGroup".to_string()))),
+        ))
     }
 }
 
@@ -939,6 +1176,53 @@ pub struct NdShaderParam2 {
 impl NdNode for NdShaderParam2 {
     fn header(&self) -> &NdHeader {
         &self.header
+    }
+
+    fn add_gltf_node(
+        &self,
+        virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        let main_attribute_map = self.main_payload().attribute_map();
+
+        let attrib_key = "colour0";
+
+        if let Some(attrib) = main_attribute_map.get(attrib_key) {
+            main_attribute_map
+                .get_index_of(attrib_key)
+                .expect("Unable to find index for key that was literally just found.");
+
+            let texture_slot = attrib.val2;
+
+            match self
+                .main_payload()
+                .texture_assignments()
+                .get(texture_slot as usize)
+            {
+                Some(tex_assignment) => {
+                    let material_index = ctx.gltf.add_material(gltf::Material {
+                        name: "Some Material".to_string(),
+                        pbr_metallic_roughness: Some(gltf::PBRMetallicRoughness {
+                            base_color_texture: Some(gltf::TextureInfo {
+                                texture_index: tex_assignment.texture_index,
+                                texcoords_accessor: None,
+                            }),
+                            metallic_factor: Some(0.0),
+                            ..Default::default()
+                        }),
+                    });
+
+                    ctx.current_material = Some(material_index);
+                }
+                None => eprintln!(
+                    "Texture slot {} is referenced by an ndShaderParam, but the param only assigns {} slots.",
+                    texture_slot + 1,
+                    self.main_payload().texture_assignments().len()
+                ),
+            };
+        }
+
+        Ok(None)
     }
 }
 
