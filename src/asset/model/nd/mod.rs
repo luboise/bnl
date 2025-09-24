@@ -1,21 +1,47 @@
+mod push_buffer;
+mod shader;
+mod skeleton;
+
+pub use push_buffer::{NdBGPushBuffer, NdPushBuffer};
+pub use shader::NdShaderParam2;
+pub use skeleton::NdSkeleton;
+
+pub(crate) mod prelude {
+    // External
+    pub use gltf_writer::gltf::{self, GltfIndex};
+    pub use serde::{Serialize, ser::SerializeMap};
+
+    // Internal
+    pub use super::ModelSlice;
+    pub use crate::VirtualResource;
+    pub use crate::asset::AssetParseError;
+    pub use crate::asset::model::gltf::NdGltfContext;
+    pub use crate::asset::model::nd::{NdHeader, NdNode};
+
+    pub use super::NdError;
+
+    pub(crate) use byteorder::{LittleEndian, ReadBytesExt};
+    pub(crate) use std::io::{Cursor, Read, Seek, SeekFrom};
+}
+
 use std::{
     fmt::Display,
-    io::{self, Cursor, Read, Seek, SeekFrom},
+    io::{self},
     iter::{self},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt};
 use gltf_writer::gltf::{
-    self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, GltfIndex,
+    self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, Gltf, GltfIndex,
 };
-use indexmap::IndexMap;
+
 use serde::{Serialize, ser::SerializeMap};
 
-use crate::{
-    VirtualResource,
-    asset::{AssetParseError, model::gltf::NdGltfContext, param::KnownUnknown},
-    d3d::{D3DPrimitiveType, PixelShaderConstant, VertexShaderConstant},
+use crate::asset::{
+    model::nd::{push_buffer::DrawCall, shader::NdShaderParam2Payload},
+    param::KnownUnknown,
 };
+
+use prelude::*;
 
 #[derive(Debug)]
 pub enum NdError {
@@ -63,7 +89,6 @@ pub trait NdNode {
             grandparent = ctx.node_stack.last().copied();
             parent = node_index;
             */
-        } else {
         }
 
         if let Some(child) = self.header().first_child() {
@@ -294,6 +319,7 @@ impl NdUnknown {
 
 #[derive(Debug, Clone, Serialize)]
 pub enum Nd {
+    Skeleton(NdSkeleton),
     VertexBuffer(NdVertexBuffer),
     PushBuffer(NdPushBuffer),
     BGPushBuffer(NdBGPushBuffer),
@@ -311,6 +337,7 @@ impl NdNode for Nd {
             Nd::Group(val) => val.header(),
             Nd::Unknown(val) => val.header(),
             Nd::ShaderParam2(val) => val.header(),
+            Nd::Skeleton(val) => val.header(),
         }
     }
 
@@ -325,6 +352,7 @@ impl NdNode for Nd {
             Nd::BGPushBuffer(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
             Nd::Group(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
             Nd::ShaderParam2(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
+            Nd::Skeleton(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
             Nd::Unknown(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
         }
     }
@@ -761,141 +789,6 @@ impl NdNode for NdVertexBuffer {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct DrawCall {
-    pub(crate) data_ptr: u32,
-    pub(crate) prim_type: D3DPrimitiveType,
-    pub(crate) num_vertices: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NdPushBuffer {
-    header: NdHeader,
-
-    num_draws: u32,
-    unknown_u32_1: u32,
-    unknown_u32_2: u32,
-    unknown_u32_3: u32,
-
-    // File offsets
-    data_pointers_start: u32,
-    primitive_types_list_ptr: u32,
-    vertex_counts_list_ptr: u32,
-
-    prevent_culling_flag: u8,
-    padding: [u8; 3],
-
-    #[serde(skip_serializing)]
-    pub(crate) buffer_bytes: Vec<u8>,
-
-    pub(crate) push_buffer_base: u32,
-    pub(crate) push_buffer_size: u32,
-
-    draw_calls: Vec<DrawCall>,
-}
-
-impl NdPushBuffer {
-    pub fn draw_calls(&self) -> &[DrawCall] {
-        &self.draw_calls
-    }
-}
-
-impl NdNode for NdPushBuffer {
-    fn header(&self) -> &NdHeader {
-        &self.header
-    }
-
-    fn add_gltf_node(
-        &self,
-        virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
-        let mut mesh = gltf::Mesh::new("Idk Mesh".to_string());
-
-        let index_buffer: &Vec<u8> = &self.buffer_bytes;
-
-        let buffer_index = ctx.gltf.add_buffer(Buffer::new(index_buffer));
-        let ib_view_index = ctx.gltf.add_buffer_view(BufferView {
-            buffer_index,
-            byte_offset: 0,
-            byte_length: index_buffer.len(),
-            byte_stride: None,
-            target: None,
-        });
-
-        self.draw_calls().iter().for_each(|draw_call| {
-            let ib_accessor_index = ctx.gltf.add_accessor(Accessor::new(
-                ib_view_index,
-                (draw_call.data_ptr - self.push_buffer_base) as usize,
-                AccessorDataType::U16,
-                draw_call.num_vertices as usize,
-                AccessorComponentCount::SCALAR,
-            ));
-
-            let primitive = mesh.add_primitive(gltf::Primitive {
-                indices_accessor: Some(ib_accessor_index),
-                topology_type: match draw_call.prim_type.clone().try_into() {
-                    Ok(val) => Some(val),
-                    Err(e) => {
-                        eprintln!("{}", e);
-                        None
-                    }
-                },
-
-                material: ctx.current_material,
-                attributes: Default::default(),
-            });
-
-            if let Some(positions_accessor) = ctx.positions_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::Position, positions_accessor);
-            } else {
-                eprintln!("No positions accessor available.");
-            }
-
-            if let Some(uv_accessor) = ctx.uv_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::TexCoord(0), uv_accessor);
-            } else {
-                eprintln!("No texcoords accessor available.");
-            }
-        });
-
-        let mesh_index = ctx.gltf.add_mesh(mesh);
-
-        let mut node = gltf::Node::new(Some("node name".to_string()));
-        node.set_mesh_index(Some(mesh_index));
-
-        Ok(Some(ctx.gltf.add_node(node)))
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NdBGPushBuffer {
-    push_buffer: NdPushBuffer,
-    unknown_ptr_1: u32,
-    unknown_ptr_2: u32,
-}
-
-impl NdBGPushBuffer {
-    pub fn push_buffer(&self) -> &NdPushBuffer {
-        &self.push_buffer
-    }
-}
-
-impl NdNode for NdBGPushBuffer {
-    fn header(&self) -> &NdHeader {
-        self.push_buffer.header()
-    }
-
-    fn add_gltf_node(
-        &self,
-        virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
-        let push_buffer = self.push_buffer();
-        push_buffer.insert_into_gltf_heirarchy(virtual_res, ctx)
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct NdGroup {
     header: NdHeader,
 }
@@ -914,329 +807,6 @@ impl NdNode for NdGroup {
             ctx.gltf
                 .add_node(gltf::Node::new(Some("ndGroup".to_string()))),
         ))
-    }
-}
-
-pub const TEXTURE_ASSIGNMENT_SIZE: usize = 28;
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TextureAssignment {
-    pub(crate) texture_index: u32,
-    pub(crate) count_1: u8,
-    pub(crate) count_2: u8,
-    pub(crate) count_3: u8,
-    pub(crate) skip_diffuse_texture: bool,
-    pub(crate) unknown_1: u32,
-    pub(crate) unknown_2: u32,
-    pub(crate) unknown_3: u32,
-    pub(crate) unknown_4: u32,
-    pub(crate) unknown_5: u32,
-    // ORIGINAL FORMAT
-    /*
-       u32 textureIndex;
-    u8 flag1;
-    u8 flag2;
-    u8 flag3;
-    bool skipDiffuseTexture;
-    u32 unknown3;
-    u32 unknown4;
-    u32 unknown5;
-    u32 unknown6;
-    u32 unknown7;
-    */
-}
-
-impl TextureAssignment {
-    fn from_model_slice(model_slice: ModelSlice) -> Result<Self, std::io::Error> {
-        let mut cur = model_slice.new_cursor();
-
-        let texture_index = cur.read_u32::<LittleEndian>()?;
-        let count_1 = cur.read_u8()?;
-        let count_2 = cur.read_u8()?;
-        let count_3 = cur.read_u8()?;
-
-        let skip_diffuse_texture: bool = !matches!(cur.read_u8()?, 0);
-
-        let unknown_1 = cur.read_u32::<LittleEndian>()?;
-        let unknown_2 = cur.read_u32::<LittleEndian>()?;
-        let unknown_3 = cur.read_u32::<LittleEndian>()?;
-        let unknown_4 = cur.read_u32::<LittleEndian>()?;
-        let unknown_5 = cur.read_u32::<LittleEndian>()?;
-
-        Ok(Self {
-            texture_index,
-            count_1,
-            count_2,
-            count_3,
-            skip_diffuse_texture,
-            unknown_1,
-            unknown_2,
-            unknown_3,
-            unknown_4,
-            unknown_5,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AttributeValue {
-    pub(crate) val1: u32,
-    pub(crate) val2: u32,
-
-    pub(crate) sentinel1: u8,
-    pub(crate) sentinel2: u8,
-    pub(crate) sentinel3: u8,
-    pub(crate) sentinel4: u8,
-}
-
-fn serialize_index_map<S>(
-    index_map: &IndexMap<String, AttributeValue>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: serde::Serializer,
-{
-    let mut map = serializer.serialize_map(None)?;
-
-    for (key, value) in index_map {
-        map.serialize_entry(&key, &value)?;
-    }
-
-    map.end()
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NdShaderParam2Payload {
-    vertex_shader_constants: Vec<VertexShaderConstant>,
-    pixel_shader_constants: Vec<[u8; 4]>,
-    texture_assignments: Vec<TextureAssignment>,
-
-    alpha_ref: u8, // Index to the alpha reference texture???
-    count_1: u8,
-    count_2: u8,
-    some_count: u8,
-
-    unknown_1: u32,
-    next_payload: u32, // Pointer to next payload???
-
-    #[serde(serialize_with = "serialize_index_map")]
-    attribute_map: IndexMap<String, AttributeValue>,
-    /*
-    RawColour* pixelShaderConstants: u32 [[pointer_base("section1innersptr")]];
-    u32* somePtr2: u32 [[pointer_base("section1innersptr")]];
-    TextureAssignment* textureAssignments: u32 [[pointer_base("section1innersptr")]];
-    u32 numTextureAssignments;
-    u32 numBruhs;
-    u32 numPixelShaderConstants;
-
-    // 0x18
-    u8 alphaReference;
-    u8 flag1;
-    u8 flag2;
-    u8 someCount;
-
-    u32 someU32_5;
-
-    // 0x20
-    u32* child: u32 [[pointer_base("section1innersptr")]];
-
-    u32* assignmentsStart: u32 [[pointer_base("section1innersptr")]];
-    u32 numAssignments;
-        */
-}
-
-impl NdShaderParam2Payload {
-    pub fn from_model_slice(model_slice: &ModelSlice) -> Result<Self, NdError> {
-        let mut cur = Cursor::new(model_slice.slice);
-
-        cur.seek(SeekFrom::Start(model_slice.read_start as u64))?;
-
-        let pixel_shader_constants_start = cur.read_u32::<LittleEndian>()?;
-        let vertex_shader_constants_start = cur.read_u32::<LittleEndian>()?;
-        let texture_assignments_start = cur.read_u32::<LittleEndian>()?;
-        let num_texture_assignments = cur.read_u32::<LittleEndian>()?;
-        let num_vertex_shader_constants = cur.read_u32::<LittleEndian>()?;
-        let num_pixel_shader_constants = cur.read_u32::<LittleEndian>()?;
-
-        let alpha_ref = cur.read_u8()?;
-        let count_1 = cur.read_u8()?;
-        let count_2 = cur.read_u8()?;
-        let some_count = cur.read_u8()?;
-
-        let unknown_1 = cur.read_u32::<LittleEndian>()?;
-        let next_payload_start = cur.read_u32::<LittleEndian>()?;
-        let attributes_start = cur.read_u32::<LittleEndian>()?;
-        let num_attributes = cur.read_u32::<LittleEndian>()?;
-
-        let mut attribute_map = IndexMap::new();
-
-        cur.seek(SeekFrom::Start(attributes_start as u64))?;
-
-        for _ in 0..num_attributes {
-            let name_ptr = cur.read_u32::<LittleEndian>()?;
-            let val1 = cur.read_u32::<LittleEndian>()?;
-            let val2 = cur.read_u32::<LittleEndian>()?;
-
-            let sentinel1 = cur.read_u8()?;
-            let sentinel2 = cur.read_u8()?;
-            let sentinel3 = cur.read_u8()?;
-            let sentinel4 = cur.read_u8()?;
-
-            let mut name_cur = cur.clone();
-            name_cur.seek(SeekFrom::Start(name_ptr as u64))?;
-
-            let utf8_chars: Vec<u8> = name_cur
-                .bytes()
-                .map(|b| b.unwrap())
-                .take_while(|b| *b != 0)
-                .collect();
-
-            let name = String::from_utf8(utf8_chars)
-                .map_err(|e| NdError::CreationFailure(e.to_string()))?;
-
-            if let Some(old_val) = attribute_map.insert(
-                name.clone(),
-                AttributeValue {
-                    val1,
-                    val2,
-                    sentinel1,
-                    sentinel2,
-                    sentinel3,
-                    sentinel4,
-                },
-            ) {
-                println!(
-                    "Overriding old entry in attribute map.\n{}: {:?}",
-                    name, old_val
-                );
-            }
-        }
-
-        let vertex_constants_slice = &model_slice.slice[vertex_shader_constants_start as usize..];
-        let vertex_shader_constants: Vec<VertexShaderConstant> = vertex_constants_slice
-            .chunks_exact(size_of::<VertexShaderConstant>())
-            .take(num_vertex_shader_constants as usize)
-            .map(|chunk| {
-                let mut constant: VertexShaderConstant = [0.0, 0.0, 0.0, 0.0];
-
-                chunk.chunks_exact(4).enumerate().for_each(|(i, ch)| {
-                    constant[i] = f32::from_le_bytes(ch.try_into().unwrap());
-                });
-
-                constant
-            })
-            .collect();
-
-        let pixel_constants_slice = &model_slice.slice[pixel_shader_constants_start as usize..];
-        let pixel_shader_constants: Vec<PixelShaderConstant> = pixel_constants_slice
-            .chunks_exact(size_of::<PixelShaderConstant>())
-            .take(num_pixel_shader_constants as usize)
-            .map(|chunk| chunk.try_into().unwrap())
-            .collect();
-
-        let mut texture_assignments = vec![];
-
-        for i in 0..num_texture_assignments as usize {
-            texture_assignments.push(TextureAssignment::from_model_slice(
-                model_slice.at(texture_assignments_start as usize + i * TEXTURE_ASSIGNMENT_SIZE),
-            )?);
-        }
-
-        Ok(NdShaderParam2Payload {
-            vertex_shader_constants,
-            pixel_shader_constants,
-            texture_assignments,
-            alpha_ref,
-            count_1,
-            count_2,
-            some_count,
-            unknown_1,
-            next_payload: next_payload_start,
-            attribute_map,
-        })
-    }
-
-    pub fn attribute_map(&self) -> &IndexMap<String, AttributeValue> {
-        &self.attribute_map
-    }
-
-    pub fn texture_assignments(&self) -> &[TextureAssignment] {
-        &self.texture_assignments
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NdShaderParam2 {
-    header: NdHeader,
-
-    main_payload: NdShaderParam2Payload,
-    sub_payload: Option<NdShaderParam2Payload>,
-}
-
-impl NdNode for NdShaderParam2 {
-    fn header(&self) -> &NdHeader {
-        &self.header
-    }
-
-    fn add_gltf_node(
-        &self,
-        virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
-        let main_attribute_map = self.main_payload().attribute_map();
-
-        let attrib_key = "colour0";
-
-        if let Some(attrib) = main_attribute_map.get(attrib_key) {
-            main_attribute_map
-                .get_index_of(attrib_key)
-                .expect("Unable to find index for key that was literally just found.");
-
-            let texture_slot = attrib.val2;
-
-            match self
-                .main_payload()
-                .texture_assignments()
-                .get(texture_slot as usize)
-            {
-                Some(tex_assignment) => {
-                    let material_index = ctx.gltf.add_material(gltf::Material {
-                        name: "Some Material".to_string(),
-                        pbr_metallic_roughness: Some(gltf::PBRMetallicRoughness {
-                            base_color_texture: Some(gltf::TextureInfo {
-                                texture_index: tex_assignment.texture_index,
-                                texcoords_accessor: None,
-                            }),
-                            metallic_factor: Some(0.0),
-                            ..Default::default()
-                        }),
-                    });
-
-                    ctx.current_material = Some(material_index);
-                }
-                None => eprintln!(
-                    "Texture slot {} is referenced by an ndShaderParam, but the param only assigns {} slots.",
-                    texture_slot + 1,
-                    self.main_payload().texture_assignments().len()
-                ),
-            };
-        }
-
-        Ok(None)
-    }
-}
-
-impl NdShaderParam2 {
-    pub fn num_bound_textures(&self) -> usize {
-        self.main_payload.texture_assignments.len()
-    }
-
-    pub fn main_payload(&self) -> &NdShaderParam2Payload {
-        &self.main_payload
-    }
-
-    pub fn sub_payload(&self) -> Option<&NdShaderParam2Payload> {
-        self.sub_payload.as_ref()
     }
 }
 
@@ -1294,7 +864,7 @@ mod tests {
         .expect("Unable to create ND");
 
         if let Nd::ShaderParam2(sp2) = nd {
-            let attribute_map = &sp2.main_payload.attribute_map;
+            let attribute_map = &sp2.main_payload().attribute_map();
 
             assert_eq!(attribute_map.len(), 2, "Attribute map is wrong size.");
 
