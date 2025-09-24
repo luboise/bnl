@@ -1,19 +1,12 @@
 use std::path::{self, Path};
 
-use gltf_writer::gltf::{
-    self, Accessor, AccessorComponentCount, AccessorDataType, Buffer, BufferView, Gltf, GltfIndex,
-    Mesh, Node, PBRMetallicRoughness, Primitive, Scene, VertexAttribute,
-    serialisation::GltfExportType,
-};
+use gltf_writer::gltf::{self, Gltf, GltfIndex, serialisation::GltfExportType};
 
 use crate::{
     VirtualResource,
     asset::{
         Asset, AssetDescription, AssetParseError, Dump, DumpToDir,
-        model::{
-            ModelDescriptor,
-            nd::{Nd, NdNode, VertexBufferViewType},
-        },
+        model::{ModelDescriptor, nd::NdNode},
         texture::TextureData,
     },
 };
