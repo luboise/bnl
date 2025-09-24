@@ -50,6 +50,10 @@ impl NdNode for NdVertexBuffer {
         let buffer_index = ctx.gltf.add_buffer(gb);
 
         for res_view in self.resource_views() {
+            if res_view.is_empty() {
+                continue;
+            }
+
             let buffer_view_index = ctx.gltf.add_buffer_view(gltf::BufferView::new(
                 buffer_index,
                 res_view.start() as usize,
@@ -70,33 +74,34 @@ impl NdNode for NdVertexBuffer {
                 ));
 
                 ctx.positions_accessor = Some(accessor_index);
+            } else {
+                match res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
+                    Ok(accessor_index) => {
+                        if res_view.res_type() == VertexBufferViewType::UV
+                            && ctx.uv_accessor.is_none()
+                        {
+                            /*
+                            let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
+                                buffer_view_index,
+                                0,
+                                gltf::AccessorDataType::F32,
+                                res_view.len() / 8,
+                                gltf::AccessorComponentCount::VEC2,
+                            ));
+                            */
+
+                            ctx.uv_accessor = Some(accessor_index);
+                        }
+                    }
+
+                    Err(e) => {
+                        eprintln!(
+                            "Unable to add bv {} to gltf file.\nError: {}",
+                            buffer_view_index, e
+                        );
+                    }
+                };
             }
-
-            if let Err(e) = res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
-                eprintln!(
-                    "Unable to add bv {} to gltf file.\nError: {}",
-                    buffer_view_index, e
-                );
-
-                return Ok(None);
-            } else if res_view.res_type() == VertexBufferViewType::UV && ctx.uv_accessor.is_none() {
-                let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
-                    buffer_view_index,
-                    0,
-                    gltf::AccessorDataType::F32,
-                    res_view.len() / 8,
-                    gltf::AccessorComponentCount::VEC2,
-                ));
-
-                ctx.uv_accessor = Some(accessor_index);
-            }
-
-            if let Err(e) = res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
-                eprintln!(
-                    "Unable to add bv {} to gltf file.\nError: {}",
-                    buffer_view_index, e
-                );
-            };
         }
 
         Ok(None)
@@ -177,7 +182,8 @@ impl VertexBufferResourceView {
 
                 Ok(gltf.add_accessor(gltf::Accessor::new(
                     buffer_view_index,
-                    self.view_start as usize,
+                    // self.view_start as usize,
+                    0,
                     gltf::AccessorDataType::F32,
                     num_vertices as usize,
                     gltf::AccessorComponentCount::VEC3,
@@ -188,7 +194,8 @@ impl VertexBufferResourceView {
 
                 Ok(gltf.add_accessor(gltf::Accessor::new(
                     buffer_view_index,
-                    self.view_start as usize,
+                    // self.view_start as usize,
+                    0,
                     gltf::AccessorDataType::F32,
                     num_vertices as usize,
                     gltf::AccessorComponentCount::VEC2,
@@ -231,5 +238,28 @@ impl VertexBufferResourceView {
 
     pub fn res_type(&self) -> VertexBufferViewType {
         self.res_type
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NdVertexShader {
+    pub(crate) header: NdHeader,
+}
+
+impl NdNode for NdVertexShader {
+    fn header(&self) -> &NdHeader {
+        &self.header
+    }
+
+    fn add_gltf_node(
+        &self,
+        virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        let mesh_node_index = ctx
+            .gltf
+            .add_node(gltf::Node::new(Some("ndVertexShader".to_string())));
+
+        Ok(Some(mesh_node_index))
     }
 }

@@ -50,7 +50,7 @@ impl NdNode for NdPushBuffer {
         _virtual_res: &VirtualResource,
         ctx: &mut NdGltfContext,
     ) -> Result<Option<GltfIndex>, AssetParseError> {
-        let mut mesh = gltf::Mesh::new("Idk Mesh".to_string());
+        // let mut mesh = gltf::Mesh::new("Idk Mesh".to_string());
 
         let index_buffer: &Vec<u8> = &self.buffer_bytes;
 
@@ -63,6 +63,10 @@ impl NdNode for NdPushBuffer {
             target: None,
         });
 
+        let mut primitives = Vec::new();
+
+        println!("Adding {} draw calls.", self.draw_calls().len());
+
         self.draw_calls().iter().for_each(|draw_call| {
             let ib_accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
                 ib_view_index,
@@ -72,7 +76,7 @@ impl NdNode for NdPushBuffer {
                 gltf::AccessorComponentCount::SCALAR,
             ));
 
-            let primitive = mesh.add_primitive(gltf::Primitive {
+            let mut primitive = gltf::Primitive {
                 indices_accessor: Some(ib_accessor_index),
                 topology_type: match draw_call.prim_type.clone().try_into() {
                     Ok(val) => Some(val),
@@ -84,7 +88,7 @@ impl NdNode for NdPushBuffer {
 
                 material: ctx.current_material,
                 attributes: Default::default(),
-            });
+            };
 
             if let Some(positions_accessor) = ctx.positions_accessor {
                 primitive.set_attribute(gltf::VertexAttribute::Position, positions_accessor);
@@ -97,14 +101,37 @@ impl NdNode for NdPushBuffer {
             } else {
                 eprintln!("No texcoords accessor available.");
             }
+
+            primitives.push(primitive);
         });
 
-        let mesh_index = ctx.gltf.add_mesh(mesh);
+        let index = ctx.current_node_index().unwrap() as usize;
 
-        let mut node = gltf::Node::new(Some("node name".to_string()));
-        node.set_mesh_index(Some(mesh_index));
+        let mesh: &mut gltf::Mesh = match ctx.gltf.meshes_mut().get_mut(index) {
+            Some(val) => val,
+            None => {
+                let new_mesh = gltf::Mesh::new("Idk Mesh".to_string());
 
-        Ok(Some(ctx.gltf.add_node(node)))
+                let new_mesh_index = ctx.gltf.add_mesh(new_mesh);
+
+                ctx.current_node()
+                    .unwrap()
+                    .set_mesh_index(Some(new_mesh_index));
+
+                ctx.gltf
+                    .meshes_mut()
+                    .get_mut(new_mesh_index as usize)
+                    .unwrap()
+            }
+        };
+
+        for primitive in primitives {
+            mesh.add_primitive(primitive);
+        }
+
+        Ok(None)
+
+        // Ok(Some(ctx.gltf.add_node(node)))
     }
 }
 

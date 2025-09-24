@@ -83,6 +83,14 @@ impl NdGltfContext {
             None => None,
         }
     }
+
+    pub fn current_node_index(&self) -> Option<GltfIndex> {
+        if self.node_stack.is_empty() {
+            return None;
+        }
+
+        Some(*self.node_stack.get(self.node_stack.len() - 1).unwrap())
+    }
 }
 
 impl Asset for GLTFModel {
@@ -157,6 +165,8 @@ impl Asset for GLTFModel {
             ctx.current_scene = ctx.gltf.scenes().len() as u32;
 
             for nd in &mesh_desc.primitives {
+                println!("FOUND ND");
+
                 if let Some(new_index) = nd.insert_into_gltf_heirarchy(virtual_res, &mut ctx)? {
                     scene.add_node(new_index);
                 }

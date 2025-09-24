@@ -95,7 +95,7 @@ pub trait NdNode {
         }
 
         if let Some(child) = self.header().first_child() {
-            child.add_gltf_node(virtual_res, ctx)?;
+            child.insert_into_gltf_heirarchy(virtual_res, ctx)?;
         }
 
         if node_index_opt.is_some() {
@@ -110,7 +110,7 @@ pub trait NdNode {
         }
 
         if let Some(next_sibling) = self.header().next_sibling() {
-            next_sibling.add_gltf_node(virtual_res, ctx)?;
+            next_sibling.insert_into_gltf_heirarchy(virtual_res, ctx)?;
         }
 
         Ok(node_index_opt)
@@ -124,6 +124,7 @@ impl From<KnownNdType> for String {
             KnownNdType::PushBuffer => "ndPushBuffer",
             KnownNdType::BGPushBuffer => "ndBGPushBuffer",
             KnownNdType::Shader2 => "ndShader2",
+            KnownNdType::VertexShader => "ndVertexShader",
             KnownNdType::ShaderParam2 => "ndShaderParam2",
             KnownNdType::Group => "ndGroup",
             KnownNdType::Skeleton => "ndSkeleton",
@@ -264,6 +265,7 @@ pub enum KnownNdType {
     PushBuffer,
     BGPushBuffer,
     Shader2,
+    VertexShader,
     ShaderParam2,
     Skeleton,
     Group,
@@ -276,6 +278,7 @@ impl Display for KnownNdType {
             KnownNdType::PushBuffer => write!(f, "ndPushBuffer"),
             KnownNdType::BGPushBuffer => write!(f, "ndBGPushBuffer"),
             KnownNdType::Shader2 => write!(f, "ndShader2"),
+            KnownNdType::VertexShader => write!(f, "ndVertexShader"),
             KnownNdType::ShaderParam2 => write!(f, "ndShaderParam2"),
             KnownNdType::Skeleton => write!(f, "ndSkeleton"),
             KnownNdType::Group => write!(f, "ndGroup"),
@@ -292,6 +295,7 @@ impl TryFrom<String> for KnownNdType {
             "ndPushBuffer" => Ok(KnownNdType::PushBuffer),
             "ndBGPushBuffer" => Ok(KnownNdType::BGPushBuffer),
             "ndShader2" => Ok(KnownNdType::Shader2),
+            "ndVertexShader" => Ok(KnownNdType::VertexShader),
             "ndShaderParam2" => Ok(KnownNdType::ShaderParam2),
             "ndSkeleton" => Ok(KnownNdType::Skeleton),
             "ndGroup" => Ok(KnownNdType::Group),
@@ -344,6 +348,7 @@ pub enum Nd {
     BGPushBuffer(NdBGPushBuffer),
     Group(NdGroup),
     Shader2(NdShader2),
+    VertexShader(NdVertexShader),
     ShaderParam2(NdShaderParam2),
     Unknown(NdUnknown),
 }
@@ -357,6 +362,7 @@ impl NdNode for Nd {
             Nd::Group(val) => val.header(),
             Nd::Unknown(val) => val.header(),
             Nd::Shader2(val) => val.header(),
+            Nd::VertexShader(val) => val.header(),
             Nd::ShaderParam2(val) => val.header(),
             Nd::Skeleton(val) => val.header(),
         }
@@ -368,14 +374,15 @@ impl NdNode for Nd {
         ctx: &mut NdGltfContext,
     ) -> Result<Option<GltfIndex>, AssetParseError> {
         match self {
-            Nd::VertexBuffer(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
-            Nd::PushBuffer(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
-            Nd::BGPushBuffer(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
-            Nd::Group(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
-            Nd::Shader2(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
-            Nd::ShaderParam2(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
-            Nd::Skeleton(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
-            Nd::Unknown(nd) => nd.insert_into_gltf_heirarchy(virtual_res, ctx),
+            Nd::VertexBuffer(nd) => nd.add_gltf_node(virtual_res, ctx),
+            Nd::PushBuffer(nd) => nd.add_gltf_node(virtual_res, ctx),
+            Nd::BGPushBuffer(nd) => nd.add_gltf_node(virtual_res, ctx),
+            Nd::Group(nd) => nd.add_gltf_node(virtual_res, ctx),
+            Nd::Shader2(nd) => nd.add_gltf_node(virtual_res, ctx),
+            Nd::VertexShader(nd) => nd.add_gltf_node(virtual_res, ctx),
+            Nd::ShaderParam2(nd) => nd.add_gltf_node(virtual_res, ctx),
+            Nd::Skeleton(nd) => nd.add_gltf_node(virtual_res, ctx),
+            Nd::Unknown(nd) => nd.add_gltf_node(virtual_res, ctx),
         }
     }
 }
@@ -567,6 +574,7 @@ impl Nd {
                 }
                 KnownNdType::Skeleton => Ok(Nd::Skeleton(NdSkeleton { header })),
                 KnownNdType::Shader2 => Ok(Nd::Shader2(NdShader2 { header })),
+                KnownNdType::VertexShader => Ok(Nd::VertexShader(NdVertexShader { header })),
             }
         } else {
             Ok(Nd::Unknown(NdUnknown { header }))

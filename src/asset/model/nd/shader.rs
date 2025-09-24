@@ -82,9 +82,13 @@ impl NdNode for NdShaderParam2 {
                     self.main_payload().texture_assignments().len()
                 ),
             };
+        } else {
+            ctx.current_material = None;
         }
 
-        Ok(None)
+        Ok(Some(ctx.gltf.add_node(gltf::Node::new(Some(
+            "ndShaderParam2".to_string(),
+        )))))
     }
 }
 
