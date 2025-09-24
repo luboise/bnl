@@ -379,8 +379,10 @@ fn insert_nd_into_gltf(
                             pbr_metallic_roughness: Some(PBRMetallicRoughness {
                                 base_color_texture: Some(gltf::TextureInfo {
                                     texture_index: tex_assignment.texture_index,
-                                    texcoords_accessor: ctx.uv_accessor,
+                                    texcoords_accessor: None,
                                 }),
+                                metallic_factor: Some(0.0),
+                                ..Default::default()
                             }),
                         });
 
