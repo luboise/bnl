@@ -1,5 +1,6 @@
 use gltf_writer::gltf::{self, GltfError};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
+use serde::Serialize;
 
 type BitCount = usize;
 
@@ -261,7 +262,7 @@ impl PixelBits for D3DFormat {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum D3DPrimitiveType {
     None = 0,
     PointList = 1,

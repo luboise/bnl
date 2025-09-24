@@ -251,8 +251,6 @@ fn insert_nd_into_gltf(
         Nd::PushBuffer(buf) => {
             let mut mesh = Mesh::new("Idk Mesh".to_string());
 
-            mesh.set_material(ctx.current_material);
-
             let index_buffer: &Vec<u8> = &buf.buffer_bytes;
 
             let buffer_index = ctx.gltf.add_buffer(Buffer::new(index_buffer));
@@ -282,6 +280,8 @@ fn insert_nd_into_gltf(
                             None
                         }
                     },
+
+                    material: ctx.current_material,
                     attributes: Default::default(),
                 });
 
@@ -309,8 +309,6 @@ fn insert_nd_into_gltf(
             let buf = bg_buf.push_buffer();
             let mut mesh = Mesh::new("Idk Mesh".to_string());
 
-            mesh.set_material(ctx.current_material);
-
             let index_buffer: &Vec<u8> = &buf.buffer_bytes;
 
             let buffer_index = ctx.gltf.add_buffer(Buffer::new(index_buffer));
@@ -340,6 +338,7 @@ fn insert_nd_into_gltf(
                             None
                         }
                     },
+                    material: ctx.current_material,
                     attributes: Default::default(),
                 });
 

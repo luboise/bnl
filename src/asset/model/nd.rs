@@ -53,15 +53,15 @@ const NDHEADER_SIZE: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct NdHeader {
-    name_ptr: u32,
-    nd_type: NdType,
-    unknown_u16: u16, // Possibly index
-    unknown_ptr1: u32,
-    unknown_ptr2: u32,
-    unknown_u32: u32,
-    first_child_ptr: u32,
-    next_sibling_ptr: u32,
-    parent_ptr: u32,
+    pub name_ptr: u32,
+    pub nd_type: NdType,
+    pub unknown_u16: u16, // Possibly index
+    pub unknown_ptr1: u32,
+    pub unknown_ptr2: u32,
+    pub unknown_u32: u32,
+    pub first_child_ptr: u32,
+    pub next_sibling_ptr: u32,
+    pub parent_ptr: u32,
 
     // DO NOT SERIALISE
     first_child: Option<Box<Nd>>,
@@ -222,7 +222,7 @@ impl ToString for NdType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NdUnknown {
     header: NdHeader,
 }
@@ -233,7 +233,7 @@ impl NdUnknown {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum Nd {
     VertexBuffer(NdVertexBuffer),
     PushBuffer(NdPushBuffer),
@@ -243,6 +243,7 @@ pub enum Nd {
     Unknown(NdUnknown),
 }
 
+/*
 impl Serialize for Nd {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -251,6 +252,7 @@ impl Serialize for Nd {
         self.header().serialize(serializer)
     }
 }
+*/
 
 pub struct ModelSlice<'a> {
     pub(crate) slice: &'a [u8],
@@ -447,7 +449,7 @@ impl NdNode for Nd {
 }
 
 #[repr(u8)]
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, PartialEq, Clone, Copy, Serialize)]
 pub enum VertexBufferViewType {
     Skin = 0x0,
     SkinWeight = 0x8,
@@ -482,7 +484,7 @@ struct GLTFViewAttribs {
     base_type: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct VertexBufferResourceView {
     stride: u8,
     res_type: VertexBufferViewType,
@@ -581,7 +583,7 @@ impl VertexBufferResourceView {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NdVertexBuffer {
     header: NdHeader,
     resource_views_ptr: u32,
@@ -603,14 +605,14 @@ impl NdNode for NdVertexBuffer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DrawCall {
     pub(crate) data_ptr: u32,
     pub(crate) prim_type: D3DPrimitiveType,
     pub(crate) num_vertices: u32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NdPushBuffer {
     header: NdHeader,
 
@@ -627,8 +629,9 @@ pub struct NdPushBuffer {
     prevent_culling_flag: u8,
     padding: [u8; 3],
 
-    // DO NOT SERIALISE
+    #[serde(skip_serializing)]
     pub(crate) buffer_bytes: Vec<u8>,
+
     pub(crate) push_buffer_base: u32,
     pub(crate) push_buffer_size: u32,
 
@@ -647,7 +650,7 @@ impl NdNode for NdPushBuffer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NdBGPushBuffer {
     push_buffer: NdPushBuffer,
     unknown_ptr_1: u32,
@@ -666,7 +669,7 @@ impl NdNode for NdBGPushBuffer {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NdGroup {
     header: NdHeader,
 }
@@ -677,7 +680,9 @@ impl NdNode for NdGroup {
     }
 }
 
-#[derive(Debug, Clone)]
+pub const TEXTURE_ASSIGNMENT_SIZE: usize = 28;
+
+#[derive(Debug, Clone, Serialize)]
 pub struct TextureAssignment {
     pub(crate) texture_index: u32,
     pub(crate) count_1: u8,
@@ -736,7 +741,7 @@ impl TextureAssignment {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AttributeValue {
     pub(crate) val1: u32,
     pub(crate) val2: u32,
@@ -747,7 +752,23 @@ pub struct AttributeValue {
     pub(crate) sentinel4: u8,
 }
 
-#[derive(Debug, Clone)]
+fn serialize_index_map<S>(
+    index_map: &IndexMap<String, AttributeValue>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let mut map = serializer.serialize_map(None)?;
+
+    for (key, value) in index_map {
+        map.serialize_entry(&key, &value)?;
+    }
+
+    map.end()
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct NdShaderParam2Payload {
     vertex_shader_constants: Vec<VertexShaderConstant>,
     pixel_shader_constants: Vec<[u8; 4]>,
@@ -761,6 +782,7 @@ pub struct NdShaderParam2Payload {
     unknown_1: u32,
     next_payload: u32, // Pointer to next payload???
 
+    #[serde(serialize_with = "serialize_index_map")]
     attribute_map: IndexMap<String, AttributeValue>,
     /*
     RawColour* pixelShaderConstants: u32 [[pointer_base("section1innersptr")]];
@@ -877,9 +899,9 @@ impl NdShaderParam2Payload {
 
         let mut texture_assignments = vec![];
 
-        for _ in 0..num_texture_assignments {
+        for i in 0..num_texture_assignments as usize {
             texture_assignments.push(TextureAssignment::from_model_slice(
-                model_slice.at(texture_assignments_start as usize),
+                model_slice.at(texture_assignments_start as usize + i * TEXTURE_ASSIGNMENT_SIZE),
             )?);
         }
 
@@ -906,7 +928,7 @@ impl NdShaderParam2Payload {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct NdShaderParam2 {
     header: NdHeader,
 
@@ -921,7 +943,7 @@ impl NdNode for NdShaderParam2 {
 }
 
 impl NdShaderParam2 {
-    fn num_bound_textures(&self) -> usize {
+    pub fn num_bound_textures(&self) -> usize {
         self.main_payload.texture_assignments.len()
     }
 
