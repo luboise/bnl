@@ -5,6 +5,29 @@ use indexmap::IndexMap;
 use crate::d3d::{PixelShaderConstant, VertexShaderConstant};
 
 #[derive(Debug, Clone, Serialize)]
+pub struct NdShader2 {
+    pub(crate) header: NdHeader,
+}
+
+impl NdNode for NdShader2 {
+    fn header(&self) -> &NdHeader {
+        &self.header
+    }
+
+    fn add_gltf_node(
+        &self,
+        _virtual_res: &VirtualResource,
+        ctx: &mut NdGltfContext,
+    ) -> Result<Option<GltfIndex>, AssetParseError> {
+        let mesh_node_index = ctx
+            .gltf
+            .add_node(gltf::Node::new(Some("ndShader2".to_string())));
+
+        Ok(Some(mesh_node_index))
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct NdShaderParam2 {
     pub(crate) header: NdHeader,
 

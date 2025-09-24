@@ -59,6 +59,32 @@ pub struct NdGltfContext {
     pub(crate) node_stack: Vec<GltfIndex>,
 }
 
+impl NdGltfContext {
+    pub fn push_node(&mut self, child_index: GltfIndex) {
+        // If the scene is not empty, add the new one as a child
+        if let Some(node) = self.current_node() {
+            node.add_child(child_index);
+        }
+
+        self.node_stack.push(child_index);
+    }
+
+    pub fn pop_node(&mut self) -> Option<&mut gltf::Node> {
+        if let Some(popped) = self.node_stack.pop() {
+            return Some(self.gltf.nodes_mut().get_mut(popped as usize).unwrap());
+        }
+
+        None
+    }
+
+    pub fn current_node(&mut self) -> Option<&mut gltf::Node> {
+        match self.node_stack.last() {
+            Some(index) => self.gltf.nodes_mut().get_mut(*index as usize),
+            None => None,
+        }
+    }
+}
+
 impl Asset for GLTFModel {
     type Descriptor = ModelDescriptor;
 
@@ -157,74 +183,3 @@ impl Asset for GLTFModel {
         todo!()
     }
 }
-
-/*
-fn insert_nd_into_gltf(
-    nd_node: &Nd,
-    virtual_res: &VirtualResource,
-    ctx: &mut NdGltfContext,
-) -> Result<Option<GltfIndex>, AssetParseError> {
-    let mut node_index = None;
-
-    match nd_node {
-        Nd::VertexBuffer(buf) => {}
-        Nd::PushBuffer(buf) => {}
-        Nd::BGPushBuffer(bg_buf) => {}
-        Nd::ShaderParam2(val) => {}
-        Nd::Group(_val) => {}
-        Nd::Unknown(_val) => (),
-    };
-
-    if let Some(index) = node_index {
-        ctx.node_stack.push(index);
-    }
-
-    let header = nd_node.header();
-
-    // If has child, get child
-    if let Some(child) = header.first_child() {
-        insert_nd_into_gltf(child, virtual_res, ctx)?;
-    }
-
-    /*
-    if let Some(new_child) = new_node.take() {
-        // Insert into self or parent
-        if let Some(ni) = node_index {
-            ctx.gltf
-                .nodes_mut()
-                .get_mut(ni as usize)
-                .unwrap()
-                .add_child(new_child);
-        } else {
-            match &ctx.node_stack.last() {
-                Some(last) => ctx
-                    .gltf
-                    .nodes_mut()
-                    .get_mut(**last as usize)
-                    .unwrap()
-                    .add_child(new_child),
-                None => ctx
-                    .gltf
-                    .scenes_mut()
-                    .get_mut(ctx.current_scene as usize)
-                    .unwrap()
-                    .add_node(new_child),
-            };
-        }
-    }
-
-
-    */
-
-    if let Some(next_sibling) = header.next_sibling() {
-        insert_nd_into_gltf(next_sibling, virtual_res, ctx)?;
-    }
-
-    // Pop self from ctx when done processing
-    if node_index.is_some() {
-        ctx.node_stack.pop();
-    }
-
-    Ok(node_index)
-}
-*/
