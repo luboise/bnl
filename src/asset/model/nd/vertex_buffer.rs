@@ -62,46 +62,54 @@ impl NdNode for NdVertexBuffer {
                 None,
             ));
 
-            if res_view.res_type() == VertexBufferViewType::Vertex
-                && ctx.positions_accessor.is_none()
-            {
-                let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
-                    buffer_view_index,
-                    0,
-                    gltf::AccessorDataType::F32,
-                    res_view.len() / 12,
-                    gltf::AccessorComponentCount::VEC3,
-                ));
+            match res_view.res_type {
+                VertexBufferViewType::Vertex => {
+                    let num_vertices = res_view.view_size / 12;
 
-                ctx.positions_accessor = Some(accessor_index);
-            } else {
-                match res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
-                    Ok(accessor_index) => {
-                        if res_view.res_type() == VertexBufferViewType::UV
-                            && ctx.uv_accessor.is_none()
-                        {
-                            /*
-                            let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
-                                buffer_view_index,
-                                0,
-                                gltf::AccessorDataType::F32,
-                                res_view.len() / 8,
-                                gltf::AccessorComponentCount::VEC2,
-                            ));
-                            */
+                    let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
+                        buffer_view_index,
+                        res_view.view_start as usize,
+                        gltf::AccessorDataType::F32,
+                        num_vertices as usize,
+                        gltf::AccessorComponentCount::VEC3,
+                    ));
 
-                            ctx.uv_accessor = Some(accessor_index);
-                        }
+                    ctx.positions_accessor = Some(accessor_index);
+                }
+                VertexBufferViewType::UV => {
+                    let num_vertices = res_view.view_size / 8;
+
+                    let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
+                        buffer_view_index,
+                        // res_view.view_start as usize,
+                        0,
+                        gltf::AccessorDataType::F32,
+                        num_vertices as usize,
+                        gltf::AccessorComponentCount::VEC2,
+                    ));
+
+                    if ctx.uv_accessor.is_none() {
+                        ctx.uv_accessor = Some(accessor_index);
                     }
-
-                    Err(e) => {
-                        eprintln!(
-                            "Unable to add bv {} to gltf file.\nError: {}",
-                            buffer_view_index, e
-                        );
-                    }
-                };
-            }
+                }
+                VertexBufferViewType::Unknown10
+                | VertexBufferViewType::Unknown11
+                | VertexBufferViewType::SkinWeight
+                | VertexBufferViewType::Unknown14
+                | VertexBufferViewType::Unknown15
+                | VertexBufferViewType::Unknown16
+                | VertexBufferViewType::Skin
+                | VertexBufferViewType::KnknownFF => {
+                    eprintln!(
+                        "Unable to add bv {} to gltf file.\nError: {}",
+                        buffer_view_index,
+                        format!(
+                            "VertexBufferViewType {:?} not implemented.",
+                            res_view.res_type
+                        )
+                    );
+                }
+            };
         }
 
         Ok(None)
@@ -169,50 +177,6 @@ impl VertexBufferResourceView {
             view_start: cur.read_u32::<LittleEndian>()?,
             view_size: cur.read_u32::<LittleEndian>()?,
         })
-    }
-
-    pub(crate) fn add_to_gltf(
-        &self,
-        gltf: &mut gltf::Gltf,
-        buffer_view_index: GltfIndex,
-    ) -> Result<GltfIndex, std::io::Error> {
-        match self.res_type {
-            VertexBufferViewType::Vertex => {
-                let num_vertices = self.view_size / 12;
-
-                Ok(gltf.add_accessor(gltf::Accessor::new(
-                    buffer_view_index,
-                    // self.view_start as usize,
-                    0,
-                    gltf::AccessorDataType::F32,
-                    num_vertices as usize,
-                    gltf::AccessorComponentCount::VEC3,
-                )))
-            }
-            VertexBufferViewType::UV => {
-                let num_vertices = self.view_size / 8;
-
-                Ok(gltf.add_accessor(gltf::Accessor::new(
-                    buffer_view_index,
-                    // self.view_start as usize,
-                    0,
-                    gltf::AccessorDataType::F32,
-                    num_vertices as usize,
-                    gltf::AccessorComponentCount::VEC2,
-                )))
-            }
-            VertexBufferViewType::Unknown10
-            | VertexBufferViewType::Unknown11
-            | VertexBufferViewType::SkinWeight
-            | VertexBufferViewType::Unknown14
-            | VertexBufferViewType::Unknown15
-            | VertexBufferViewType::Unknown16
-            | VertexBufferViewType::Skin
-            | VertexBufferViewType::KnknownFF => Err(std::io::Error::other(format!(
-                "VertexBufferViewType {:?} not implemented.",
-                self.res_type
-            ))),
-        }
     }
 
     pub fn len(&self) -> usize {
