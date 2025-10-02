@@ -82,9 +82,12 @@ impl ScriptOperation {
 
         let mut cur = Cursor::new(&mut bytes[..]);
 
-        cur.write_u32::<LittleEndian>(size as u32);
-        cur.write_u32::<LittleEndian>(self.opcode.into());
-        cur.write_all(self.operand_bytes());
+        cur.write_u32::<LittleEndian>(size as u32)
+            .expect("Failed to write.");
+        cur.write_u32::<LittleEndian>(self.opcode.into())
+            .expect("Failed to write.");
+        cur.write_all(self.operand_bytes())
+            .expect("Failed to write.");
 
         bytes
     }
