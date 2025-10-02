@@ -971,33 +971,6 @@ impl BNLFile {
         assets
     }
 
-    /*
-    pub fn update_asset<A: Asset>(&mut self, name: &str, asset: &A) -> Result<(), AssetError> {
-        for asset_desc in &self.asset_descriptions {
-            if asset_desc.name() == name {
-                if asset_desc.asset_type() != A::asset_type() {
-                    return Err(AssetError::TypeMismatch);
-                }
-
-                let dvl = self
-                    .get_dataview_list(asset_desc.dataview_list_ptr as usize)
-                    .map_err(|_| {
-                        AssetError::ParseError(AssetParseError::InvalidDataViews(
-                            "Unable to get data view list from BNL data.".to_string(),
-                        ))
-                    })?;
-
-                dvl.write_bytes(&asset.resource_data(), &mut self.buffer_bytes)
-                    .map_err(|_| AssetError::ParseError(AssetParseError::ErrorParsingDescriptor))?;
-
-                return Ok(());
-            }
-        }
-
-        Err(AssetError::NotFound)
-    }
-    */
-
     pub fn update_asset_from_descriptor<AD: AssetDescriptor>(
         &mut self,
         name: &str,
