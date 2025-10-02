@@ -138,6 +138,14 @@ impl TextureData {
             bytes,
         })
     }
+
+    pub fn descriptor(&self) -> &TextureDescriptor {
+        &self.descriptor
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
 }
 
 impl Dump for TextureData {
