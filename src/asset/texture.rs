@@ -123,6 +123,8 @@ impl TextureData {
         };
 
         if desired_format != self.descriptor.format {
+            println!("Attempting transcode.");
+
             bytes = images::transcode(
                 self.descriptor.width.into(),
                 self.descriptor.height.into(),
@@ -130,6 +132,8 @@ impl TextureData {
                 desired_format,
                 bytes.as_ref(),
             )?;
+
+            println!("Transcode succeeded.");
         }
 
         Ok(RGBAImage {

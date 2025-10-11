@@ -1102,7 +1102,7 @@ impl BNLFile {
 }
 
 #[derive(Debug)]
-pub struct VirtualResource<'a> {
+pub(crate) struct VirtualResource<'a> {
     slices: Vec<&'a [u8]>,
 }
 

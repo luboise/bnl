@@ -15,13 +15,13 @@ pub(crate) mod prelude {
 
     // Internal
     pub use super::ModelSlice;
-    pub use crate::VirtualResource;
     pub use crate::asset::AssetParseError;
     pub use crate::asset::model::gltf::NdGltfContext;
     pub use crate::asset::model::nd::{NdHeader, NdNode};
 
     pub use super::NdError;
 
+    pub(crate) use crate::VirtualResource;
     pub(crate) use byteorder::{LittleEndian, ReadBytesExt};
     pub(crate) use std::io::{Cursor, Read, Seek, SeekFrom};
 }
