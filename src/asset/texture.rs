@@ -100,8 +100,11 @@ pub struct Texture {
 }
 
 impl Texture {
-    pub fn new(descriptor: TextureDescriptor, bytes: Vec<u8>) -> Self {
-        Texture { descriptor, bytes }
+    pub fn new(descriptor: TextureDescriptor, image_bytes: Vec<u8>) -> Self {
+        Texture {
+            descriptor,
+            bytes: image_bytes,
+        }
     }
 
     pub fn to_rgba_image(&self) -> Result<RGBAImage, std::io::Error> {

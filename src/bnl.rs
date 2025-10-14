@@ -138,9 +138,15 @@ impl From<AssetMetadata> for AssetDescription {
 }
 
 impl AssetMetadata {
-    pub fn new(name: AssetName, asset_type: AssetType, unk_1: u32, unk_2: u32) -> Self {
+    pub fn new(name: &str, asset_type: AssetType, unk_1: u32, unk_2: u32) -> Self {
+        let mut name_bytes: AssetName = [0x00; 128];
+
+        let bytes: Vec<u8> = name.bytes().take(128).collect();
+
+        name_bytes[0..bytes.len()].copy_from_slice(&bytes);
+
         Self {
-            name,
+            name: name_bytes,
             asset_type,
             unk_1,
             unk_2,
@@ -705,5 +711,39 @@ impl From<std::io::Error> for BNLError {
 impl From<miniz_oxide::inflate::DecompressError> for BNLError {
     fn from(_: miniz_oxide::inflate::DecompressError) -> Self {
         BNLError::DecompressionFailure
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_bnl_from_raw() -> Result<(), String> {
+        let tex_descriptor = include_bytes!("asset/test_data/texture0_descriptor").to_vec();
+        let tex_image_bytes = include_bytes!("asset/test_data/texture0_resource0").to_vec();
+
+        let metadata = AssetMetadata::new("aid_sometexture", AssetType::ResTexture, 0, 0);
+        let raw_asset = RawAsset::new(metadata, tex_descriptor, Some(vec![tex_image_bytes]));
+
+        let mut new_bnl = BNLFile::default();
+        new_bnl.append_raw_asset(raw_asset);
+
+        let serialised = new_bnl.to_bytes();
+        let deserialised = BNLFile::from_bytes(&serialised)
+            .map_err(|_| "Failed to deserialise the BNL file which was just created in memory.")?;
+
+        assert!(
+            deserialised.assets.len() == 1,
+            "The number of assets in the deserialised file is {} (expected 1)",
+            deserialised.assets.len()
+        );
+
+        assert!(
+            deserialised.get_raw_asset("aid_sometexture").is_some(),
+            "No asset exists in the new bnl file with the name aid_sometexture"
+        );
+
+        Ok(())
     }
 }
