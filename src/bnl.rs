@@ -184,15 +184,19 @@ impl RawAsset {
         }
     }
 
-    pub fn description(&self) -> &AssetMetadata {
-        &self.metadata
-    }
-    pub fn descriptor_bytes(&self) -> &[u8] {
-        &self.descriptor_bytes
+    pub fn name(&self) -> &str {
+        self.metadata.name()
     }
 
-    pub fn description_mut(&mut self) -> &mut AssetMetadata {
+    pub fn metadata(&self) -> &AssetMetadata {
+        &self.metadata
+    }
+    pub fn metadata_mut(&mut self) -> &mut AssetMetadata {
         &mut self.metadata
+    }
+
+    pub fn descriptor_bytes(&self) -> &[u8] {
+        &self.descriptor_bytes
     }
     pub fn descriptor_bytes_mut(&mut self) -> &mut Vec<u8> {
         &mut self.descriptor_bytes
@@ -205,7 +209,7 @@ impl RawAsset {
         &mut self.resource_chunks
     }
 
-    pub fn as_asset<AL: AssetLike>(self) -> Result<Asset<AL>, AssetError> {
+    pub fn to_asset<AL: AssetLike>(self) -> Result<Asset<AL>, AssetError> {
         let description = &self.metadata;
 
         if description.asset_type() != AL::asset_type() {
@@ -646,7 +650,7 @@ impl BNLFile {
     {
         let raw_asset = self.get_raw_asset_mut(name).ok_or(AssetError::NotFound)?;
 
-        let mut asset = raw_asset.clone().as_asset::<AL>()?;
+        let mut asset = raw_asset.clone().to_asset::<AL>()?;
 
         f(&mut asset)?;
 

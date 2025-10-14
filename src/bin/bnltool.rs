@@ -57,7 +57,7 @@ fn main() {
 
     raw_assets.iter().for_each(|raw_asset| {
         // ./out/common_bnl/aid_texture_xyz
-        let asset_path: PathBuf = bnl_out_path.join(&raw_asset.name);
+        let asset_path: PathBuf = bnl_out_path.join(raw_asset.name());
 
         if asset_path.is_file() {
             eprintln!(
@@ -79,29 +79,29 @@ fn main() {
             }
         }
 
-        std::fs::write(asset_path.join("descriptor"), &raw_asset.descriptor_bytes).unwrap_or_else(
+        std::fs::write(asset_path.join("descriptor"), raw_asset.descriptor_bytes()).unwrap_or_else(
             |e| {
                 eprintln!(
                     "Unable to write descriptor for {}\nError: {}",
-                    &raw_asset.name, e
+                    &raw_asset.name(),
+                    e
                 );
             },
         );
 
-        raw_asset
-            .data_slices
-            .iter()
-            .enumerate()
-            .for_each(|(i, slice)| {
+        if let Some(data_slices) = raw_asset.resource_chunks() {
+            data_slices.iter().enumerate().for_each(|(i, slice)| {
                 std::fs::write(asset_path.join(format!("resource{}", i)), slice).unwrap_or_else(
                     |e| {
                         eprintln!(
                             "Unable to write descriptor for {}\nError: {}",
-                            &raw_asset.name, e
+                            raw_asset.name(),
+                            e
                         );
                     },
                 );
             });
+        }
     });
 }
 
