@@ -129,7 +129,7 @@ impl AssetDescriptor for Descriptor {
     }
 }
 
-impl Asset for  {
+impl AssetLike for  {
     type Descriptor = Descriptor;
 
     fn new(

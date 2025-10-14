@@ -11,21 +11,18 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use crate::{
     VirtualResource,
     asset::{
-        Asset, AssetDescription, AssetDescriptor, AssetParseError,
+         AssetDescriptor, AssetLike, AssetParseError, AssetType,
         model::sub_main::{Mesh, MeshDescriptor},
-        texture::TextureData,
         texture::{Texture, TextureDescriptor},
     },
-    game::AssetType,
 };
 
 #[derive(Debug)]
 pub struct Model {
-    description: AssetDescription,
     descriptor: ModelDescriptor,
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
     meshes: Vec<Mesh>,
-    textures: Vec<TextureData>,
+    textures: Vec<Texture>,
 }
 
 #[repr(u32)]
@@ -190,11 +187,10 @@ impl AssetDescriptor for ModelDescriptor {
     }
 }
 
-impl Asset for Model {
+impl AssetLike for Model {
     type Descriptor = ModelDescriptor;
 
     fn new(
-        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
@@ -205,14 +201,13 @@ impl Asset for Model {
         }
 
         let mut model = Model {
-            description: description.clone(),
             descriptor: descriptor.clone(),
             textures: vec![],
             meshes: vec![],
         };
 
         for subtex_desc in &model.descriptor.texture_descriptors {
-            model.textures.push(TextureData::new(
+            model.textures.push(Texture::new(
                 subtex_desc.clone(),
                 virtual_res
                     .get_bytes(
@@ -221,8 +216,8 @@ impl Asset for Model {
                     )
                     .map_err(|e| {
                         AssetParseError::InvalidDataViews(
-                            "Unable to get section of Virtual Resource required for texture."
-                                .to_string(),
+                            format!("Unable to get section of Virtual Resource required for texture. Error: {}", e)
+                               
                         )
                     })?,
             ));
@@ -231,24 +226,19 @@ impl Asset for Model {
         Ok(model)
     }
 
-    fn descriptor(&self) -> &Self::Descriptor {
-        &self.descriptor
+    fn get_descriptor(&self) -> Self::Descriptor {
+        self.descriptor.clone()
     }
 
-    fn description(&self) -> &super::AssetDescription {
-        todo!()
-    }
-
-    fn as_bnl_asset(&self) -> crate::BNLAsset {
+    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
+        // TODO: Implement this
         todo!()
     }
 }
 
-pub trait Subresource {}
-
 impl Model {
     /// Returns a list of textures if the model has any, and None otherwise.
-    pub fn textures(&self) -> Option<&Vec<TextureData>> {
+    pub fn textures(&self) -> Option<&Vec<Texture>> {
         Some(&self.textures)
     }
 }

@@ -7,11 +7,9 @@ use std::{
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::{
-    BNLAsset, VirtualResource, VirtualResourceError,
-    asset::{Asset, AssetDescription, AssetDescriptor, AssetParseError, Dump},
+    VirtualResource, VirtualResourceError,
+    asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType, Dump},
     d3d::{D3DFormat, LinearColour, PixelBits, StandardFormat, Swizzled},
-    game::AssetType,
-    images::{self},
 };
 
 const TEXTURE_DESCRIPTOR_SIZE: usize = 28;
@@ -95,21 +93,15 @@ pub enum TextureError {
     UnsupportedOutputType,
 }
 
-#[derive(Debug)]
-pub struct Texture {
-    description: AssetDescription,
-    data: TextureData,
-}
-
 #[derive(Debug, Clone)]
-pub struct TextureData {
+pub struct Texture {
     descriptor: TextureDescriptor,
     bytes: Vec<u8>,
 }
 
-impl TextureData {
+impl Texture {
     pub fn new(descriptor: TextureDescriptor, bytes: Vec<u8>) -> Self {
-        TextureData { descriptor, bytes }
+        Texture { descriptor, bytes }
     }
 
     pub fn to_rgba_image(&self) -> Result<RGBAImage, std::io::Error> {
@@ -125,7 +117,7 @@ impl TextureData {
         if desired_format != self.descriptor.format {
             println!("Attempting transcode.");
 
-            bytes = images::transcode(
+            bytes = crate::images::transcode(
                 self.descriptor.width.into(),
                 self.descriptor.height.into(),
                 self.descriptor.format,
@@ -152,7 +144,7 @@ impl TextureData {
     }
 }
 
-impl Dump for TextureData {
+impl Dump for Texture {
     // fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
     fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
         let path = dump_path.as_ref();
@@ -237,11 +229,10 @@ impl AssetDescriptor for TextureDescriptor {
     }
 }
 
-impl Asset for Texture {
+impl AssetLike for Texture {
     type Descriptor = TextureDescriptor;
 
     fn new(
-        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
@@ -278,31 +269,17 @@ impl Asset for Texture {
         };
 
         Ok(Texture {
-            description: description.clone(),
-            data: TextureData {
-                descriptor: descriptor.clone(),
-                bytes,
-            },
+            descriptor: descriptor.clone(),
+            bytes,
         })
     }
 
-    fn descriptor(&self) -> &Self::Descriptor {
-        &self.data.descriptor
+    fn get_descriptor(&self) -> Self::Descriptor {
+        self.descriptor.clone()
     }
 
-    fn as_bnl_asset(&self) -> BNLAsset {
-        BNLAsset {
-            description: self.description().clone(),
-            descriptor_bytes: self
-                .descriptor()
-                .to_bytes()
-                .expect("Fatal error creating BNLAsset from Texture."),
-            resource_chunks: Some(vec![self.data.bytes.clone()]), // Single view of the texture bytes
-        }
-    }
-
-    fn description(&self) -> &AssetDescription {
-        &self.description
+    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
+        Some(vec![self.bytes.clone()]) // Single view of the texture bytes
     }
 }
 
@@ -369,7 +346,7 @@ impl Texture {
             return Err(TextureError::SizeMismatch);
         }
 
-        let transcoded = images::transcode(
+        let transcoded = crate::images::transcode(
             self.descriptor().width as usize,
             self.descriptor().height as usize,
             D3DFormat::Swizzled(Swizzled::R8G8B8A8),
@@ -384,23 +361,9 @@ impl Texture {
             TextureError::UnsupportedOutputType
         })?;
 
-        self.data.bytes = transcoded;
+        self.bytes = transcoded;
 
         Ok(())
-    }
-
-    pub fn to_rgba_image(&self) -> Result<RGBAImage, std::io::Error> {
-        self.data.to_rgba_image()
-    }
-
-    pub fn data(&self) -> &TextureData {
-        &self.data
-    }
-}
-
-impl Dump for Texture {
-    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
-        self.data.dump(dump_path)
     }
 }
 
@@ -457,5 +420,22 @@ mod tests {
         assert_eq!(tex_desc.height, 0x80);
         assert_eq!(tex_desc.texture_offset, 0);
         assert_eq!(tex_desc.texture_size, 0x2b00);
+    }
+
+    #[test]
+    fn from_test_file() -> Result<(), String> {
+        let descriptor_bytes = include_bytes!("test_data/texture0_descriptor");
+        let resource_bytes = include_bytes!("test_data/texture0_resource0");
+
+        let desc = TextureDescriptor::from_bytes(descriptor_bytes).map_err(|e| {
+            format!(
+                "Failed to create texture descriptor from test bytes. Error: {}",
+                e
+            )
+        })?;
+
+        let _tex = Texture::new(desc, resource_bytes.to_vec());
+
+        Ok(())
     }
 }

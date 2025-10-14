@@ -25,7 +25,7 @@ pub enum KnownOpcode {
     SetSceneName = 0xa,
 
     // SetPlayState = 0xe, // eg. Free Play
-    // Signal0f = 0x0f,
+    WaitToMoveOn = 0x0f,
     // Signal11 = 0x11,
 
     // Signal18 = 0x18,
@@ -40,6 +40,8 @@ pub enum KnownOpcode {
     CreateWeaponsOnlyChallenge = 0x23,
     CreateFindTheKeyChallenge = 0x27,
     CreateNoBreakHouseChallenge = 0x28,
+    UpdateDoor = 0x29,
+
     // Signal2f = 0x2f,
     // Signal30 = 0x30,
 
@@ -70,11 +72,11 @@ impl HasParams for KnownOpcode {
             KnownOpcode::EndScript => {}
             KnownOpcode::SetBackground => {
                 map.insert("background_aid".to_string(), ParamDescriptor {
-                                            param_type: ParamType::String(0x80),
-                                            description:
-                                                "The asset ID of the background to be loaded at the beginning of the scene."
-                                                    .to_string(),
-                                        });
+                                                            param_type: ParamType::String(0x80),
+                                                            description:
+                                                                "The asset ID of the background to be loaded at the beginning of the scene."
+                                                                    .to_string(),
+                                                        });
             }
             KnownOpcode::SetSceneName => {
                 map.insert(
@@ -150,42 +152,43 @@ impl HasParams for KnownOpcode {
             }
             KnownOpcode::PlayWalkinCutscene => {
                 map.insert(
-                                            "cutscene_aid".to_string(),
-                                            ParamDescriptor {
-                                                param_type: ParamType::String(0x80),
-                                                description: "The asset ID of the cutscene to be played on room walk in (eg. aid_cutscene_ghoulies_roomwalkins_walkina)".to_string(),
-                                            },
-                                        );
+                                                            "cutscene_aid".to_string(),
+                                                            ParamDescriptor {
+                                                                param_type: ParamType::String(0x80),
+                                                                description: "The asset ID of the cutscene to be played on room walk in (eg. aid_cutscene_ghoulies_roomwalkins_walkina)".to_string(),
+                                                            },
+                                                        );
             }
             KnownOpcode::PlaySound => {
                 map.insert(
-                                            "soundbank_id".to_string(),
-                                            ParamDescriptor {
-                                                param_type: ParamType::String(0x80),
-                                                description: "The soundbank ID of the audio to be played. (eg. XACT_SOUNDBANK_GZOMBIE_DISAPPOINTED)"
-                                                    .to_string(),
-                                            },
-                                        );
+                                                            "soundbank_id".to_string(),
+                                                            ParamDescriptor {
+                                                                param_type: ParamType::String(0x80),
+                                                                description: "The soundbank ID of the audio to be played. (eg. XACT_SOUNDBANK_GZOMBIE_DISAPPOINTED)"
+                                                                    .to_string(),
+                                                            },
+                                                        );
             }
             KnownOpcode::CreateKillAllByTagChallenge => {
                 map.insert(
-                                            "actor_tag".to_string(),
-                                            ParamDescriptor {
-                                                param_type: ParamType::String(0x40),
-                                                description: "The tag of the actor which must be killed in the challenge. (eg. objTag_Actor_Zombie)"
-                                                    .to_string(),
-                                            },
-                                        );
+                                                            "actor_tag".to_string(),
+                                                            ParamDescriptor {
+                                                                param_type: ParamType::String(0x40),
+                                                                description: "The tag of the actor which must be killed in the challenge. (eg. objTag_Actor_Zombie)"
+                                                                    .to_string(),
+                                                            },
+                                                        );
 
                 map.insert(
-                                            "unknownU32".to_string(),
-                                            ParamDescriptor {
-                                                param_type: ParamType::U32,
-                                                description: "Unknown U32 value. Has a value of 1 typically even for kill all challenges."
-                                                    .to_string(),
-                                            },
-                                        );
+                                                            "unknownU32".to_string(),
+                                                            ParamDescriptor {
+                                                                param_type: ParamType::U32,
+                                                                description: "Unknown U32 value. Has a value of 1 typically even for kill all challenges."
+                                                                    .to_string(),
+                                                            },
+                                                        );
             }
+
             KnownOpcode::SetPlayerHealth => {
                 map.insert(
                     "health".to_string(),
@@ -197,10 +200,47 @@ impl HasParams for KnownOpcode {
                     },
                 );
             }
-            KnownOpcode::CreateFindTheGhoulieKeyChallenge
+
+            KnownOpcode::WaitToMoveOn
+            | KnownOpcode::CreateFindTheGhoulieKeyChallenge
             | KnownOpcode::CreateWeaponsOnlyChallenge
             | KnownOpcode::CreateFindTheKeyChallenge
             | KnownOpcode::CreateNoBreakHouseChallenge => (),
+
+            KnownOpcode::UpdateDoor => {
+                map.insert(
+                    "door_id".to_string(),
+                    ParamDescriptor {
+                        param_type: ParamType::U32,
+                        description: "The ID of the door which will be altered.".to_string(),
+                    },
+                );
+
+                map.insert(
+                    "open_status".to_string(),
+                    ParamDescriptor {
+                        param_type: ParamType::U32,
+                        description: "Whether the door is shut or not. (0 = open, 1 = shut)"
+                            .to_string(),
+                    },
+                );
+
+                map.insert(
+                    "unknownU32_1".to_string(),
+                    ParamDescriptor {
+                        param_type: ParamType::U32,
+                        description: "Unknown U32 value (only used sometimes)".to_string(),
+                    },
+                );
+
+                map.insert(
+                    "unknownU32_2".to_string(),
+                    ParamDescriptor {
+                        param_type: ParamType::U32,
+                        description: "Unknown U32 value (only used sometimes)".to_string(),
+                    },
+                );
+            }
         }
 
         map
@@ -211,6 +251,7 @@ impl KnownOpcode {
     pub fn operands_size(&self) -> usize {
         match self {
             KnownOpcode::EndScript => 0x00,
+            KnownOpcode::WaitToMoveOn => 0x00,
             KnownOpcode::CreateTimeLimitChallenge => 0x4,
             KnownOpcode::CreateKillAllByTagChallenge => 0x40 + 0x4,
             KnownOpcode::CreateFindTheGhoulieKeyChallenge
@@ -223,6 +264,7 @@ impl KnownOpcode {
             KnownOpcode::PlayWalkinCutscene => 0x80,
             KnownOpcode::PlaySound => 0x80,
             KnownOpcode::SetPlayerHealth => 0x4,
+            KnownOpcode::UpdateDoor => 0x10,
         }
     }
 }

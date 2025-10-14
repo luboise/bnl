@@ -5,13 +5,12 @@ use std::io::{Cursor, Read, Write};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::{
-    BNLAsset, VirtualResource,
+    VirtualResource,
     asset::{
-        Asset, AssetDescription, AssetDescriptor, AssetParseError,
+        AssetDescriptor, AssetLike, AssetParseError, AssetType,
         param::{HasParams, Param, ParamsShape},
         script::ops::{KnownOpcode, ScriptOpcode},
     },
-    game::AssetType,
 };
 
 #[derive(Debug, Clone)]
@@ -38,7 +37,6 @@ pub enum ScriptError {
 
 #[derive(Debug)]
 pub struct Script {
-    description: AssetDescription,
     descriptor: ScriptDescriptor,
     data: Vec<Vec<u8>>,
 }
@@ -183,16 +181,14 @@ impl AssetDescriptor for ScriptDescriptor {
     }
 }
 
-impl Asset for Script {
+impl AssetLike for Script {
     type Descriptor = ScriptDescriptor;
 
     fn new(
-        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
         Ok(Script {
-            description: description.clone(),
             descriptor: descriptor.clone(),
             data: virtual_res
                 .slices
@@ -202,25 +198,14 @@ impl Asset for Script {
         })
     }
 
-    fn descriptor(&self) -> &Self::Descriptor {
-        &self.descriptor
+    fn get_descriptor(&self) -> Self::Descriptor {
+        self.descriptor.clone()
     }
 
-    fn description(&self) -> &AssetDescription {
-        &self.description
-    }
-
-    fn as_bnl_asset(&self) -> BNLAsset {
-        BNLAsset {
-            description: self.description.clone(),
-            descriptor_bytes: self
-                .descriptor
-                .to_bytes()
-                .expect("Unable to get descriptor from script."),
-            resource_chunks: match self.data.len() {
-                0 => None,
-                _ => Some(self.data.clone()),
-            },
+    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
+        match self.data.len() {
+            0 => None,
+            _ => Some(self.data.clone()),
         }
     }
 }

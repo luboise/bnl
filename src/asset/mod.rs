@@ -6,11 +6,12 @@ use std::{
 };
 
 use crate::{
-    BNLAsset, DataView, VirtualResource, VirtualResourceError,
-    asset::model::sub_main::SubresourceError, game::AssetType,
+    AssetMetadata, DataView, RawAsset, VirtualResource, VirtualResourceError,
+    asset::model::sub_main::SubresourceError,
 };
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 pub mod param;
 
@@ -20,11 +21,30 @@ pub mod script;
 pub mod texture;
 
 #[derive(Debug, Clone)]
-pub struct RawAsset {
-    pub name: String,
-    pub asset_type: AssetType,
-    pub descriptor_bytes: Vec<u8>,
-    pub data_slices: Vec<Vec<u8>>,
+pub struct Asset<AL: AssetLike> {
+    pub(crate) metadata: AssetMetadata,
+    pub(crate) asset: AL,
+}
+
+impl<AL: AssetLike> Asset<AL> {
+    pub fn metadata(&self) -> &AssetMetadata {
+        &self.metadata
+    }
+
+    pub fn asset(&self) -> &AL {
+        &self.asset
+    }
+    pub fn asset_mut(&mut self) -> &mut AL {
+        &mut self.asset
+    }
+
+    pub fn to_raw_asset(self) -> Result<RawAsset, AssetError> {
+        Ok(RawAsset::new(
+            self.metadata,
+            self.asset.get_descriptor().to_bytes()?,
+            self.asset.get_resource_chunks(),
+        ))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -290,74 +310,105 @@ pub trait AssetDescriptor: Sized + Clone {
     fn asset_type() -> AssetType;
 }
 
-pub trait Asset: Sized {
+pub trait AssetLike: Sized {
     type Descriptor: AssetDescriptor;
 
     fn new(
-        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError>;
 
-    fn description(&self) -> &AssetDescription;
-    fn descriptor(&self) -> &Self::Descriptor;
-
     fn asset_type() -> AssetType {
         Self::Descriptor::asset_type()
     }
-    fn name(&self) -> &str {
-        self.description().name()
-    }
 
-    fn as_bnl_asset(&self) -> BNLAsset;
+    fn get_descriptor(&self) -> Self::Descriptor;
+    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>>;
 }
 
 pub type AssetName = [u8; 128];
-
 pub const ASSET_DESCRIPTION_SIZE: usize = 0xa0;
 
 #[derive(Clone)]
 pub struct AssetDescription {
-    pub(crate) name: AssetName,
-    pub(crate) asset_type: AssetType,
+    pub(crate) metadata: AssetMetadata,
 
-    pub(crate) unk_1: u32,
-    pub(crate) unk_2: u32,
     pub(crate) chunk_count: u32,
 
     pub(crate) descriptor_ptr: u32,
     pub(crate) descriptor_size: u32,
     pub(crate) dataview_list_ptr: u32,
     pub(crate) resource_size: u32, // The total size needed for this asset, including its descriptor list
+}
 
-    // DO NOT SERIALISE
-    pub(crate) asset_desc_index: usize,
+// Taken from project_grabbed
+// https://github.com/x1nixmzeng/project-grabbed
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[repr(u32)]
+pub enum AssetType {
+    ResTexture = 1,
+    ResAnim = 2,
+    ResUnknown3 = 3,
+    ResModel = 4,
+    ResAnimEvents = 5,
+
+    ResCutscene = 7,
+    ResCutsceneEvents = 8,
+
+    ResMisc = 10,
+    ResActorGoals = 11,
+    ResMarker = 12,
+    ResFxCallout = 13,
+    ResAidList = 14,
+
+    ResLoctext = 16,
+
+    ResXSoundbank = 18,
+    ResXDSP = 19,
+    ResXCueList = 20,
+    ResFont = 21,
+    ResGhoulybox = 22,
+    ResGhoulyspawn = 23,
+    ResScript = 24,
+    ResActorAttribs = 25,
+    ResEmitter = 26,
+    ResParticle = 27,
+    ResRumble = 28,
+    ResShakeCam = 29,
+
+    ResCount, // This will automatically take the next value (30)
 }
 
 impl AssetDescription {
-    pub fn from_bytes(bytes: &[u8]) -> Result<AssetDescription, std::io::Error> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, std::io::Error> {
         let mut cur = Cursor::new(&bytes);
 
-        let mut asset_name: AssetName = [0u8; 0x80];
-        cur.read_exact(&mut asset_name)?;
+        let mut name: AssetName = [0u8; 0x80];
+        cur.read_exact(&mut name)?;
 
         let asset_type = AssetType::try_from(cur.read_u32::<LittleEndian>()?)
             .map_err(|_| std::io::Error::other("Unable to parse asset type from BNL."))?;
 
-        Ok(AssetDescription {
-            name: asset_name,
+        let unk_1 = cur.read_u32::<LittleEndian>()?;
+        let unk_2 = cur.read_u32::<LittleEndian>()?;
+
+        let metadata = AssetMetadata {
+            name,
             asset_type,
-            unk_1: cur.read_u32::<LittleEndian>()?,
-            unk_2: cur.read_u32::<LittleEndian>()?,
+            unk_1,
+            unk_2,
+        };
+
+        let asset_description = AssetDescription {
+            metadata,
             chunk_count: cur.read_u32::<LittleEndian>()?,
             descriptor_ptr: cur.read_u32::<LittleEndian>()?,
             descriptor_size: cur.read_u32::<LittleEndian>()?,
             dataview_list_ptr: cur.read_u32::<LittleEndian>()?,
             resource_size: cur.read_u32::<LittleEndian>()?,
+        };
 
-            // Default of max
-            asset_desc_index: usize::MAX,
-        })
+        Ok(asset_description.into())
     }
 
     pub fn to_bytes(&self) -> [u8; ASSET_DESCRIPTION_SIZE] {
@@ -366,13 +417,13 @@ impl AssetDescription {
         let mut cur = Cursor::new(&mut bytes[..]);
 
         // Ensure the size of the name is 128 so that we can safely unwrap
-        assert_eq!(size_of_val(&self.name), 0x80);
-        cur.write_all(&self.name).unwrap();
+        assert_eq!(size_of_val(&self.metadata.name), 0x80);
+        cur.write_all(&self.metadata.name).unwrap();
 
-        cur.write_u32::<LittleEndian>(self.asset_type.into())
+        cur.write_u32::<LittleEndian>(self.metadata.asset_type.into())
             .unwrap();
-        cur.write_u32::<LittleEndian>(self.unk_1).unwrap();
-        cur.write_u32::<LittleEndian>(self.unk_2).unwrap();
+        cur.write_u32::<LittleEndian>(self.metadata.unk_1).unwrap();
+        cur.write_u32::<LittleEndian>(self.metadata.unk_2).unwrap();
         cur.write_u32::<LittleEndian>(self.chunk_count).unwrap();
         cur.write_u32::<LittleEndian>(self.descriptor_ptr).unwrap();
         cur.write_u32::<LittleEndian>(self.descriptor_size).unwrap();
@@ -383,23 +434,21 @@ impl AssetDescription {
         bytes
     }
 
-    pub fn name(&self) -> &str {
-        std::str::from_utf8(&self.name)
-            .unwrap_or("")
-            .split('\0')
-            .next()
-            .unwrap_or("")
-    }
-
     // Getters
+    pub fn name(&self) -> &str {
+        self.metadata.name()
+    }
     pub fn has_raw_data(&self) -> bool {
         self.resource_size > 0
     }
     pub fn asset_type(&self) -> AssetType {
-        self.asset_type
+        self.metadata.asset_type
     }
     pub fn unk_1(&self) -> u32 {
-        self.unk_1
+        self.metadata.unk_1
+    }
+    pub fn unk_2(&self) -> u32 {
+        self.metadata.unk_2
     }
     pub fn bufferview_list_ptr(&self) -> u32 {
         self.dataview_list_ptr
@@ -417,15 +466,11 @@ impl AssetDescription {
 
 impl std::fmt::Debug for AssetDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = match str::from_utf8(&self.name) {
-            Ok(s) => s.trim_matches('\x00'),
-            Err(_) => return Err(std::fmt::Error {}),
-        };
         f.debug_struct("HeaderEntry")
-            .field("name", &name)
-            .field("res_type", &self.asset_type)
-            .field("unk_1", &self.unk_1)
-            .field("unk_2", &self.unk_2)
+            .field("name", &self.name())
+            .field("res_type", &self.metadata.asset_type)
+            .field("unk_1", &self.metadata.unk_1)
+            .field("unk_2", &self.metadata.unk_2)
             .field("chunk_count", &self.chunk_count)
             .field("descriptor_ptr", &self.descriptor_ptr)
             .field("descriptor_size", &self.descriptor_size)

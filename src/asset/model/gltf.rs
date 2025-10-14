@@ -5,15 +5,14 @@ use gltf_writer::gltf::{self, Gltf, GltfIndex, serialisation::GltfExportType};
 use crate::{
     VirtualResource,
     asset::{
-        Asset, AssetDescription, AssetParseError, Dump, DumpToDir,
+        AssetLike, AssetParseError, Dump,
         model::{ModelDescriptor, nd::NdNode},
-        texture::TextureData,
+        texture::Texture,
     },
 };
 
 #[derive(Debug)]
 pub struct GLTFModel {
-    description: AssetDescription,
     descriptor: ModelDescriptor,
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
     gltf: Gltf,
@@ -26,12 +25,6 @@ impl GLTFModel {
 
     pub fn to_gltf_bytes(&self) -> serde_json::Result<Vec<u8>> {
         serde_json::to_vec_pretty(&self.gltf)
-    }
-}
-
-impl DumpToDir for GLTFModel {
-    fn dump_to_dir<P: AsRef<Path>>(&self, dump_dir: P) -> Result<(), std::io::Error> {
-        self.dump(dump_dir.as_ref().join(format!("{}.gltf", self.name())))
     }
 }
 
@@ -93,15 +86,14 @@ impl NdGltfContext {
     }
 }
 
-impl Asset for GLTFModel {
+impl AssetLike for GLTFModel {
     type Descriptor = ModelDescriptor;
 
-    fn descriptor(&self) -> &Self::Descriptor {
-        &self.descriptor
+    fn get_descriptor(&self) -> Self::Descriptor {
+        self.descriptor.clone()
     }
 
     fn new(
-        description: &AssetDescription,
         descriptor: &Self::Descriptor,
         virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
@@ -116,8 +108,8 @@ impl Asset for GLTFModel {
                 )
                 .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
-            let tex_data = TextureData::new(tex_desc.clone(), image_bytes);
-            let rgba_image = tex_data.to_rgba_image()?;
+            let tex = Texture::new(tex_desc.clone(), image_bytes);
+            let rgba_image = tex.to_rgba_image()?;
 
             let mut png = vec![];
             rgba_image
@@ -158,7 +150,7 @@ impl Asset for GLTFModel {
         };
 
         for (i, mesh_desc) in descriptor.mesh_descriptors.iter().enumerate() {
-            let scene_name = format!("{}_{}", description.name(), i + 1);
+            let scene_name = format!("model_{}", i + 1);
 
             let mut scene = gltf::Scene::new(scene_name);
 
@@ -179,17 +171,13 @@ impl Asset for GLTFModel {
             .map_err(|e| AssetParseError::InvalidDataViews(format!("{:?}", e)))?;
 
         Ok(Self {
-            description: description.clone(),
             descriptor: descriptor.clone(),
             gltf: ctx.gltf,
         })
     }
 
-    fn description(&self) -> &AssetDescription {
-        &self.description
-    }
-
-    fn as_bnl_asset(&self) -> crate::BNLAsset {
-        todo!()
+    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
+        // TODO: Create this function
+        todo!();
     }
 }
