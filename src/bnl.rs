@@ -1,6 +1,8 @@
 use std::{
+    fs,
     io::{Cursor, Read, Seek, SeekFrom, Write},
     ops::Range,
+    path::{self, PathBuf},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
@@ -9,7 +11,7 @@ use crate::{
     VirtualResource,
     asset::{
         ASSET_DESCRIPTION_SIZE, Asset, AssetDescription, AssetDescriptor, AssetError, AssetLike,
-        AssetName, AssetType, DataViewList,
+        AssetName, AssetParseError, AssetType, DataViewList,
     },
 };
 
@@ -188,6 +190,66 @@ impl RawAsset {
             descriptor_bytes,
             resource_chunks,
         }
+    }
+
+    pub fn from_dir<P: AsRef<path::Path>>(path: P) -> Result<Self, AssetParseError> {
+        let path_ref = path.as_ref();
+
+        let contents: Vec<PathBuf> = fs::read_dir(path_ref)?
+            .filter_map(|v| v.ok())
+            .map(|v| v.path())
+            .collect();
+
+        let descriptor_path = contents
+            .iter()
+            .find(|p| {
+                if let Some(file_name) = p.file_name() {
+                    file_name == "descriptor"
+                } else {
+                    false
+                }
+            })
+            .ok_or(AssetParseError::FileNotFound("descriptor".to_string()))?;
+
+        let resource_paths = contents.iter().filter(|p| {
+            if let Some(file_name) = p.file_name() {
+                file_name.to_str().unwrap().starts_with("resource")
+            } else {
+                false
+            }
+        });
+
+        let descriptor_bytes =
+            fs::read(descriptor_path).map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
+
+        let resource_files: Vec<Vec<u8>> = resource_paths
+            .into_iter()
+            .map(fs::read)
+            .collect::<Result<_, _>>()?;
+
+        let resource_chunks = match resource_files.is_empty() {
+            true => None,
+            false => Some(resource_files),
+        };
+
+        let metadata = AssetMetadata::new(
+            descriptor_path
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            AssetType::ResTexture,
+            0,
+            0,
+        );
+
+        Ok(Self {
+            metadata,
+            descriptor_bytes,
+            resource_chunks,
+        })
     }
 
     pub fn name(&self) -> &str {

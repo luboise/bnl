@@ -235,6 +235,7 @@ pub enum AssetParseError {
     ErrorParsingDescriptor,
     InputTooSmall,
     InvalidDataViews(String),
+    FileNotFound(String),
 }
 
 impl Display for AssetParseError {

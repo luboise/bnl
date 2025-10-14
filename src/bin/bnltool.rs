@@ -4,8 +4,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bnl::BNLFile;
-use clap::{Parser, Subcommand, ValueEnum};
+use bnl::{BNLFile, RawAsset};
+use clap::{Parser, Subcommand};
+use walkdir::WalkDir;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -37,6 +38,7 @@ enum Commands {
     /// Create a new BNL file from one or more directories which contain loose assets.
     Create {
         /// The directories containing the assets
+        #[arg(required = true)]
         asset_dirs: Vec<PathBuf>,
 
         #[arg(short = 'o', value_name = "FILE")]
@@ -68,7 +70,7 @@ fn main() {
                 Err(e) => {
                     eprintln!("Unable to process BNL file: {:?}", e);
 
-                    error_exit(false);
+                    error_exit();
                 }
             };
 
@@ -135,25 +137,77 @@ fn main() {
         Commands::Create {
             asset_dirs,
             output_file,
-        } => println!("Not implemented yet!"),
+        } => {
+            let mut bnl = BNLFile::default();
+
+            let mut asset_paths = vec![];
+
+            for dir in &asset_dirs {
+                let walker = WalkDir::new(dir).into_iter();
+                for asset_dir in walker
+                    .filter_map(|val| val.ok())
+                    .filter(|entry| {
+                        if let Ok(entries) = fs::read_dir(entry.path()) {
+                            entries
+                                .filter_map(|e| e.ok())
+                                .map(|e| e.path())
+                                .all(|path| !path.is_dir())
+                        } else {
+                            false
+                        }
+                    })
+                    .map(|dir_entry| dir_entry.path().to_owned())
+                {
+                    asset_paths.push(asset_dir.clone());
+                }
+                /*
+                    if !dir.exists() {
+                        eprintln!(
+                            "ERROR: Provided asset dir {} does not exist.",
+                            dir.display()
+                        );
+                        error_exit();
+                    }
+
+                        subwalker.filter_map(|e|e.ok()).filter_entry(|entry|entry.into_path.is_ok).all(|entry|)
+                    }) {
+                        println!("{}", entry?.path().display());
+                    }
+                }
+                */
+            }
+
+            let raw_assets: Vec<RawAsset> = asset_paths
+                .iter()
+                .map(|asset_path| {
+                    println!("Reading raw asset from {}", asset_path.display());
+                    RawAsset::from_dir(asset_path).unwrap()
+                })
+                .collect();
+
+            for raw_asset in raw_assets {
+                println!("Adding {} to {}", raw_asset.name(), output_file.display());
+
+                bnl.append_raw_asset(raw_asset);
+            }
+
+            println!(
+                "\nSuccessfully wrote all assets. Outputting to {}",
+                output_file.display()
+            );
+            if let Err(e) = fs::write(output_file, bnl.to_bytes()) {
+                eprintln!("Failed to write output bnl file. Error: {}", e);
+
+                error_exit();
+            } else {
+                println!("\nSuccessfully wrote bnl file.");
+            }
+        }
     }
 }
 
-fn print_usage() {
-    println!(
-        r"Usage: bnltool -x [path to BNL file]
-Examples:
-    bnltool -x my_bnl.bnl
-    bnltool -x /home/username/game/bundles/common.bnl"
-    );
-}
-
-fn error_exit(show_usage: bool) -> ! {
+fn error_exit() -> ! {
     eprintln!("\nUnable to continue.");
-
-    if show_usage {
-        print_usage();
-    }
 
     std::process::exit(1);
 }
