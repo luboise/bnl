@@ -20,6 +20,7 @@ serde = { version = "1.0.225", features = ["derive"] }
 gltf_writer = { version = "0.1.0", git = "https://github.com/luboise/gltf_writer" }
 clap = { version = "4.0", features = ["derive"] }
 walkdir = "2.5.0"
+bincode = { version = "2.0.1", features = ["serde"] }
 
 [lib]
 name = "bnl"
