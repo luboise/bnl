@@ -1,20 +1,22 @@
 use std::{
     error::Error,
     fs,
-    io::{Cursor, Read, Seek, SeekFrom},
-    path::PathBuf,
+    io::{self, Cursor, Read, Seek, SeekFrom},
+    path::{Path, PathBuf},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use serde::Deserialize;
 
-pub fn dump_xwavebank_bytes(path: PathBuf) -> Result<(), Box<dyn Error>> {
+pub fn dump_xwavebank_bytes(path: PathBuf, dump_dir: PathBuf) -> Result<(), Box<dyn Error>> {
     let bytes = fs::read(path)?;
 
     let mut cur = Cursor::new(&bytes);
 
     let mut wbnd_string = [0u8; 4];
     cur.read_exact(&mut wbnd_string)?;
+
+    println!("Reading XWavebank header.");
 
     let header = XWavebankHeader {
         wbnd_string,
@@ -25,12 +27,12 @@ pub fn dump_xwavebank_bytes(path: PathBuf) -> Result<(), Box<dyn Error>> {
         wav_entries_size: cur.read_u32::<LittleEndian>()?,
         unknown_count_2: cur.read_u32::<LittleEndian>()?,
         unknown_1: cur.read_u32::<LittleEndian>()?,
-        unknown_2: cur.read_u32::<LittleEndian>()?,
         wave_data_ptr: cur.read_u32::<LittleEndian>()?,
         wave_data_length: cur.read_u32::<LittleEndian>()?,
     };
 
     let num_wav_entries = header.wav_entries_size / (6 * 4);
+    println!("Found {} entries.", num_wav_entries);
 
     let mut wav_files: Vec<WavFile> = vec![];
 
@@ -62,6 +64,7 @@ pub fn dump_xwavebank_bytes(path: PathBuf) -> Result<(), Box<dyn Error>> {
     // Read wav data
     let mut res_cursor = cur.clone();
 
+    println!("Reading wav files.");
     for (i, raw_entry) in raw_wav_entries.into_iter().enumerate() {
         let mut audio_bytes = vec![0u8; raw_entry.num_bytes as usize];
 
@@ -74,7 +77,15 @@ pub fn dump_xwavebank_bytes(path: PathBuf) -> Result<(), Box<dyn Error>> {
         wav_files[i] = WavFile::from_raw(raw_entry, audio_bytes);
     }
 
-    dbg!(wav_files.len());
+    for (i, wav) in wav_files.iter().enumerate() {
+        let out_path = dump_dir.join(format!("wavebank_{}.wav", i));
+        println!("Dumping to {}", out_path.display());
+
+        wav.dump(out_path)?;
+
+        let raw_out_path = dump_dir.join(format!("wavebank_raw_{}", i));
+        wav.dump_raw(raw_out_path)?;
+    }
 
     Ok(())
 }
@@ -98,7 +109,6 @@ pub(crate) struct XWavebankHeader {
     unknown_count_2: u32,
 
     unknown_1: u32,
-    unknown_2: u32,
 
     wave_data_ptr: u32,
     wave_data_length: u32,
@@ -158,5 +168,38 @@ impl WavFile {
             unknown_2: raw.unknown_2,
             unknown_3: raw.unknown_3,
         }
+    }
+
+    pub fn dump<P: AsRef<Path>>(&self, out_path: P) -> Result<(), io::Error> {
+        fs::create_dir_all(out_path.as_ref().parent().unwrap())?;
+
+        let samples = self
+            .bytes
+            .chunks_exact(2)
+            .map(|chunk| i16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect::<Vec<i16>>();
+
+        /*
+        let samples = self
+            .bytes
+            .iter()
+            .map(|val| i8::from_le_bytes([*val]))
+            .map(|int| match int < 0 {
+                true => int as f32 / (i8::MIN as f32),
+                false => int as f32 / (i8::MAX as f32),
+            })
+            .collect::<Vec<f32>>();
+        */
+
+        wavers::write(out_path, &samples, 44100, 1)
+            .map_err(|_| io::Error::other("Failed to write wav file."))
+    }
+
+    pub fn dump_raw<P: AsRef<Path>>(&self, out_path: P) -> Result<(), io::Error> {
+        fs::create_dir_all(out_path.as_ref().parent().unwrap())?;
+
+        fs::write(out_path, &self.bytes)?;
+
+        Ok(())
     }
 }
