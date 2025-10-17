@@ -8,7 +8,22 @@ use std::{
 use byteorder::{LittleEndian, ReadBytesExt};
 use serde::Deserialize;
 
-pub fn dump_xwavebank_bytes(path: PathBuf, dump_dir: PathBuf) -> Result<(), Box<dyn Error>> {
+pub fn dump_wav_files(wav_files: &[WavFile], dump_dir: PathBuf) -> Result<(), Box<dyn Error>> {
+    let num_digits = (wav_files.len().checked_ilog10().unwrap_or(0) + 1) as usize;
+
+    for (i, wav) in wav_files.iter().enumerate() {
+        let out_path = dump_dir.join(format!("wavebank_{:0width$}.wav", i, width = num_digits));
+        println!("Dumping to {}", out_path.display());
+        wav.dump(out_path)?;
+
+        let raw_out_path = dump_dir.join(format!("wavebank_raw_{}", i));
+        wav.dump_raw(raw_out_path)?;
+    }
+
+    Ok(())
+}
+
+pub fn wav_files_from_path(path: PathBuf) -> Result<Vec<WavFile>, Box<dyn Error>> {
     let bytes = fs::read(path)?;
 
     let mut cur = Cursor::new(&bytes);
@@ -77,16 +92,7 @@ pub fn dump_xwavebank_bytes(path: PathBuf, dump_dir: PathBuf) -> Result<(), Box<
         wav_files[i] = WavFile::from_raw(raw_entry, audio_bytes);
     }
 
-    for (i, wav) in wav_files.iter().enumerate() {
-        let out_path = dump_dir.join(format!("wavebank_{}.wav", i));
-        println!("Dumping to {}", out_path.display());
-        wav.dump(out_path)?;
-
-        let raw_out_path = dump_dir.join(format!("wavebank_raw_{}", i));
-        wav.dump_raw(raw_out_path)?;
-    }
-
-    Ok(())
+    Ok(wav_files)
 }
 
 const XWAVEBANK_HEADER_SIZE: usize = 40;
