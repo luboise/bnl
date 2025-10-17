@@ -80,7 +80,6 @@ pub fn dump_xwavebank_bytes(path: PathBuf, dump_dir: PathBuf) -> Result<(), Box<
     for (i, wav) in wav_files.iter().enumerate() {
         let out_path = dump_dir.join(format!("wavebank_{}.wav", i));
         println!("Dumping to {}", out_path.display());
-
         wav.dump(out_path)?;
 
         let raw_out_path = dump_dir.join(format!("wavebank_raw_{}", i));

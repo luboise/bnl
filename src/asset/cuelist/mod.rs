@@ -48,6 +48,69 @@ impl CueListDescriptor {
     }
 }
 
+pub struct CueListIterator<'cl> {
+    cue_list_descriptor: &'cl CueListDescriptor,
+    current_group_index: usize,
+    current_cue_index: usize,
+}
+
+impl<'cl> CueListIterator<'cl> {
+    pub(crate) fn new(descriptor: &'cl CueListDescriptor) -> Self {
+        Self {
+            cue_list_descriptor: descriptor,
+            current_group_index: 0,
+            current_cue_index: usize::MAX,
+        }
+    }
+}
+
+impl<'cl> Iterator for CueListIterator<'cl> {
+    type Item = (&'cl String, &'cl String);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.current_cue_index = self.current_cue_index.wrapping_add(1);
+
+        let group = match self
+            .cue_list_descriptor
+            .groups
+            .get(self.current_group_index)
+        {
+            Some(v) => v,
+            None => {
+                return None;
+            }
+        };
+
+        match group.cues.get(self.current_cue_index) {
+            Some(next_cue) => {
+                return Some((&group.name, next_cue));
+            }
+            None => {
+                self.current_group_index += 1;
+                self.current_cue_index = 0;
+
+                if let Some(group) = self
+                    .cue_list_descriptor
+                    .groups
+                    .get(self.current_group_index)
+                {
+                    if let Some(cue) = group.cues.get(self.current_cue_index) {
+                        return Some((&group.name, cue));
+                    }
+                }
+            }
+        }
+
+        None
+    }
+}
+
+impl CueListDescriptor {
+    pub fn cues(&self) -> CueListIterator {
+        CueListIterator::new(self)
+    }
+}
+
 impl AssetDescriptor for CueListDescriptor {
     fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError> {
         let s = String::from_utf8(data.to_owned())
@@ -145,5 +208,54 @@ impl AssetLike for CueList {
             0 => None,
             _ => Some(self.data.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+
+    use ntest::timeout;
+
+    #[test]
+    #[timeout(1000)] // Make sure test runs in under 1 second
+    fn cue_list_iterator() {
+        let cue_counts = [3, 1, 2, 4];
+
+        let mut cues = vec![];
+
+        let groups: Vec<CueGroup> = cue_counts
+            .iter()
+            .enumerate()
+            .map(|(i, cue_count)| {
+                let group_num = i + 1;
+
+                let group_name = format!("group{}", group_num);
+
+                CueGroup::new(
+                    group_name.clone(),
+                    Some(
+                        (0..*cue_count)
+                            .map(|cue_i| {
+                                let cue_name = format!("{}cue{}", group_name, cue_i + 1);
+                                cues.push((group_name.clone(), cue_name.clone()));
+
+                                cue_name
+                            })
+                            .collect(),
+                    ),
+                )
+            })
+            .collect();
+
+        let cue_list_descriptor = CueListDescriptor { groups };
+
+        assert_eq!(
+            cue_list_descriptor
+                .cues()
+                .map(|(s1, s2)| (s1.to_owned(), s2.to_owned()))
+                .collect::<Vec<(String, String)>>(),
+            cues
+        )
     }
 }
