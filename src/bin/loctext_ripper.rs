@@ -13,7 +13,7 @@ fn main() {
 
     std::fs::write(
         format!(
-            "./loctext_{}.json",
+            "./out/loctext_{}.json",
             loctext_path
                 .file_stem()
                 .and_then(|stem| stem.to_str())
