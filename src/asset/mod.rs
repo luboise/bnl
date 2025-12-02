@@ -21,6 +21,8 @@ pub mod model;
 pub mod script;
 pub mod texture;
 
+pub mod loctext;
+
 #[derive(Debug, Clone)]
 pub struct Asset<AL: AssetLike> {
     pub(crate) metadata: AssetMetadata,
