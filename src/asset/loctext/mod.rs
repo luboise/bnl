@@ -1,10 +1,11 @@
 mod serialisation;
 use std::{
-    collections::HashMap,
+    cmp::Ordering,
+    collections::{HashMap, HashSet},
     io::{BufRead, Cursor, Read, Seek, SeekFrom},
 };
 
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 use serde::Serialize;
 use serialisation::*;
 
@@ -12,7 +13,10 @@ use crate::asset::AssetParseError;
 
 #[derive(Debug, Serialize)]
 pub struct LoctextResource {
-    #[serde(flatten)]
+    #[serde(
+        flatten,
+        serialize_with = "serde_ordered_collections::map::sorted_serialize"
+    )]
     values: HashMap<String, String>,
 }
 
@@ -123,7 +127,7 @@ impl LoctextResource {
                 let sentinel = chars_cur.read_u16::<LittleEndian>()?;
                 if sentinel != 0xFFFF {
                     return Err(AssetParseError::InvalidDataViews(format!(
-                        "Sentinel not found after values in LSBL file (found 0x{:4x} instead)",
+                        "Sentinel not found after values in LSBL file (found 0x{:04x} instead)",
                         sentinel
                     )));
                 }
@@ -229,6 +233,197 @@ impl LoctextResource {
 
         // Parse keys first, and get their hashes
     }
+
+    pub fn from_hashmap(hashmap: HashMap<String, String>) -> Result<Self, AssetParseError> {
+        // TODO: Validate the chars as UTF8 and UTF16LE
+        Ok(Self { values: hashmap })
+    }
+
+    pub fn dump(&self) -> Result<Vec<u8>, AssetParseError> {
+        let mut values_section: Vec<u8> = vec![];
+        let mut keys_section: Vec<u8> = vec![];
+        let mut unknown_section: Vec<u8> = vec![];
+        let mut hash_list_section: Vec<u8> = vec![];
+
+        #[repr(C)]
+        struct ValueLocator {
+            hash: u16,
+            char_offset: u32,
+        }
+
+        let mut value_locators = vec![];
+        let mut value_chars: Vec<u16> = vec![];
+
+        #[repr(C)]
+        struct KeyLocator {
+            hash: u16,
+            value_index: u16,
+            char_offset: u32,
+        }
+
+        let mut key_locators = vec![];
+        let mut key_chars: Vec<u8> = vec![];
+
+        let mut hashes = HashSet::<u16>::new();
+
+        // Sort by hashes (the game does binary search on the values table)
+        let mut sorted_values: Vec<_> = self.values.iter().collect();
+        sorted_values.sort_by(|(k1, _), (k2, _)| {
+            let hash1 = LoctextResource::hash_loctext_key(k1);
+            let hash2 = LoctextResource::hash_loctext_key(k2);
+
+            if hash1 < hash2 {
+                return Ordering::Less;
+            } else if hash1 > hash2 {
+                return Ordering::Greater;
+            }
+
+            Ordering::Equal
+        });
+
+        for (i, (k, v)) in sorted_values.iter().enumerate() {
+            let mut key: Vec<u8> = k.chars().map(|c| c as u8).collect();
+
+            let hash = LoctextResource::hash_loctext_key(&key);
+
+            // Add null terminator
+            key.push(0u8);
+
+            // Insert fail => already in set
+            if !hashes.insert(hash) {
+                return Err(AssetParseError::InvalidDataViews(format!(
+                    "Key {} resolves to duplicate hash: 0x{:04x}",
+                    k, hash
+                )));
+            }
+
+            let mut value: Vec<u16> = v.as_str().encode_utf16().collect();
+            value.push(0u16);
+
+            value_locators.push(ValueLocator {
+                hash,
+                char_offset: value_chars.len() as u32,
+            });
+
+            value_chars.extend(value);
+
+            key_locators.push(KeyLocator {
+                hash,
+                value_index: (i + 1) as u16,
+                char_offset: key_chars.len() as u32,
+            });
+            key_chars.extend(key);
+        }
+
+        {
+            // The size
+            values_section.write_u32::<LittleEndian>(0x00)?;
+
+            // Create values section
+            values_section.write_u32::<LittleEndian>(hashes.len() as u32)?;
+            for value_locator in value_locators {
+                values_section.write_u16::<LittleEndian>(value_locator.hash)?;
+                values_section.write_u32::<LittleEndian>(value_locator.char_offset)?;
+            }
+            // Write end of locators sentinel
+            values_section.write_u16::<LittleEndian>(0xFFFF)?;
+            values_section.write_u32::<LittleEndian>(value_chars.len() as u32)?;
+            values_section.extend(value_chars.iter().flat_map(|v| v.to_le_bytes()));
+            // Write end of values sentinel (an extra empty wchar_t)
+            values_section.write_u16::<LittleEndian>(0x0000)?;
+
+            let len = values_section.len() as u32;
+            values_section[0..4].copy_from_slice(&(len.to_le_bytes()));
+        }
+
+        if !hashes.is_empty() {
+            // The size
+            hash_list_section.write_u32::<LittleEndian>(0x00)?;
+
+            hash_list_section.write_u32::<LittleEndian>(hashes.len() as u32)?;
+
+            for hash in &hashes {
+                hash_list_section.write_u16::<LittleEndian>(*hash)?;
+            }
+
+            let len = hash_list_section.len() as u32;
+            hash_list_section[0..4].copy_from_slice(&(len.to_le_bytes()));
+        }
+
+        {
+            // The size
+            keys_section.write_u32::<LittleEndian>(0x00)?;
+
+            // Create keys section
+            keys_section.write_u32::<LittleEndian>(hashes.len() as u32)?;
+            for key_locator in key_locators {
+                keys_section.write_u16::<LittleEndian>(key_locator.hash)?;
+                keys_section.write_u16::<LittleEndian>(key_locator.value_index)?;
+                keys_section.write_u32::<LittleEndian>(key_locator.char_offset)?;
+            }
+            keys_section.extend(key_chars.iter().flat_map(|v| v.to_le_bytes()));
+
+            let len = keys_section.len() as u32;
+            keys_section[0..4].copy_from_slice(&(len.to_le_bytes()));
+        }
+
+        let mut lsbl_bytes: Vec<u8> = vec![b'L', b'S', b'B', b'L'];
+
+        let mut section_ptr = 0x1c;
+
+        // Values section ptr
+        lsbl_bytes.write_u32::<LittleEndian>(section_ptr)?;
+        lsbl_bytes.write_u32::<LittleEndian>(0x4)?;
+        lsbl_bytes.write_u32::<LittleEndian>(section_ptr)?;
+        section_ptr += values_section.len() as u32;
+
+        // Keys section ptr
+        lsbl_bytes.write_u32::<LittleEndian>(section_ptr)?;
+        section_ptr += keys_section.len() as u32;
+
+        // Unknown section ptr
+        if unknown_section.is_empty() {
+            lsbl_bytes.write_u32::<LittleEndian>(0x00)?;
+        } else {
+            lsbl_bytes.write_u32::<LittleEndian>(section_ptr)?;
+        }
+        section_ptr += unknown_section.len() as u32;
+
+        // Hash list section ptr
+        if hash_list_section.is_empty() {
+            lsbl_bytes.write_u32::<LittleEndian>(0x00)?;
+        } else {
+            lsbl_bytes.write_u32::<LittleEndian>(section_ptr)?;
+        }
+
+        lsbl_bytes.extend(values_section);
+        lsbl_bytes.extend(keys_section);
+        lsbl_bytes.extend(unknown_section);
+        lsbl_bytes.extend(hash_list_section);
+
+        let mut out_bytes: Vec<u8> = Vec::new();
+
+        out_bytes.write_u32::<LittleEndian>(0x10)?;
+        out_bytes.write_u32::<BigEndian>(0x1d_62_a2_b1)?;
+        out_bytes.write_u32::<BigEndian>(0x36_88_e5_48)?;
+        out_bytes.write_u32::<LittleEndian>(0x2)?;
+
+        // Offset of 20
+        out_bytes.write_u32::<LittleEndian>(0x20)?;
+        out_bytes.write_u32::<LittleEndian>(0xc + lsbl_bytes.len() as u32)?;
+        out_bytes.write_u32::<LittleEndian>(0x20)?;
+        out_bytes.write_u32::<LittleEndian>(0x0)?;
+
+        // LSBL file ptr
+        out_bytes.write_u32::<LittleEndian>(0x0c)?;
+        // Other section ptrs
+        out_bytes.write_u32::<LittleEndian>(0x0)?;
+        out_bytes.write_u32::<LittleEndian>(0x0)?;
+
+        out_bytes.extend(lsbl_bytes);
+
+        Ok(out_bytes)
+    }
 }
 
 #[cfg(test)]
@@ -237,6 +432,7 @@ mod tests {
 
     #[test]
     pub fn chapter_names_hash_correctly() -> Result<(), String> {
+        assert_eq!(LoctextResource::hash_loctext_key("chaptername__1"), 0x1d1);
         assert_eq!(LoctextResource::hash_loctext_key("chaptername__1"), 0x1d1);
         assert_eq!(LoctextResource::hash_loctext_key("chaptername__2"), 0x1d2);
         assert_eq!(LoctextResource::hash_loctext_key("chaptername__3"), 0x1d3);

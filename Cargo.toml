@@ -23,6 +23,7 @@ walkdir = "2.5.0"
 bincode = { version = "2.0.1", features = ["serde"] }
 wavers = "1.5.1"
 ntest = "0.9.3"
+serde-ordered-collections = "2.0.0"
 
 [lib]
 name = "bnl"

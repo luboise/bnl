@@ -71,6 +71,7 @@ dependencies = [
  "num_enum",
  "png",
  "serde",
+ "serde-ordered-collections",
  "serde_json",
  "texpresso",
  "walkdir",
@@ -440,6 +441,15 @@ checksum = "fd6c24dee235d0da097043389623fb913daddf92c76e9f5a1db88607a0bcbd1d"
 dependencies = [
  "serde_core",
  "serde_derive",
+]
+
+[[package]]
+name = "serde-ordered-collections"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd301d753ea81034aee5156d8d60fb4b47d8360289e6d10e40c4abc8281b4936"
+dependencies = [
+ "serde",
 ]
 
 [[package]]
