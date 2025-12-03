@@ -27,7 +27,7 @@ impl LoctextResource {
         let mut hash: u32 = 0;
 
         bytes.iter().for_each(|b| {
-            hash = hash * 0x10 + (*b as u32);
+            hash = hash.wrapping_mul(0x10) + (*b as u32);
 
             let masked: u32 = hash & 0xf000;
 
@@ -261,7 +261,7 @@ impl LoctextResource {
             char_offset: u32,
         }
 
-        let mut key_locators = vec![];
+        let mut key_locators: Vec<KeyLocator> = vec![];
         let mut key_chars: Vec<u8> = vec![];
 
         let mut hashes = HashSet::<u16>::new();
@@ -291,9 +291,17 @@ impl LoctextResource {
 
             // Insert fail => already in set
             if !hashes.insert(hash) {
+                let hash_user_locator = key_locators.iter().find(|kl| kl.hash == hash).unwrap();
+                let hash_user: String =
+                    String::from_utf8(key_chars[hash_user_locator.char_offset as usize..].to_vec())
+                        .unwrap()
+                        .split('\0')
+                        .take(1)
+                        .collect();
+
                 return Err(AssetParseError::InvalidDataViews(format!(
-                    "Key {} resolves to duplicate hash: 0x{:04x}",
-                    k, hash
+                    "Key {} resolves to duplicate hash: 0x{:04x}. Hash already in use by {}",
+                    k, hash, hash_user
                 )));
             }
 
@@ -443,6 +451,12 @@ mod tests {
         assert_eq!(LoctextResource::hash_loctext_key("chapternumber__3"), 0xe23);
         assert_eq!(LoctextResource::hash_loctext_key("chapternumber__4"), 0xe24);
         assert_eq!(LoctextResource::hash_loctext_key("chapternumber__5"), 0xe25);
+
+        assert_eq!(
+            LoctextResource::hash_loctext_key("dialogs__challengeawards_scaredyspiders_bronze"),
+            0xfa02
+        );
+
         Ok(())
     }
 }
