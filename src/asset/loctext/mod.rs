@@ -266,61 +266,126 @@ impl LoctextResource {
 
         let mut hashes = HashSet::<u16>::new();
 
-        // Sort by hashes (the game does binary search on the values table)
-        let mut sorted_values: Vec<_> = self.values.iter().collect();
-        sorted_values.sort_by(|(k1, _), (k2, _)| {
-            let hash1 = LoctextResource::hash_loctext_key(k1);
-            let hash2 = LoctextResource::hash_loctext_key(k2);
+        #[repr(C)]
+        struct HashCollision {
+            name: String,
+            original_hash: u16,
+            substituted_hash: u16,
+        }
 
-            if hash1 < hash2 {
+        #[repr(C)]
+        struct CollisionTableEntry {
+            name_offset: u32,
+            original_hash: u16,
+            substituted_hash: u16,
+        }
+
+        let mut collisions = Vec::<HashCollision>::new();
+
+        #[derive(Debug)]
+        struct KeyPair {
+            key: String,
+            value: String,
+        }
+
+        let mut substituted_hash: u16 = 0;
+
+        let mut hash_to_pair = HashMap::<u16, KeyPair>::new();
+        for (k, v) in self.values.clone() {
+            let mut key: Vec<u8> = k.chars().map(|c| c as u8).collect();
+            let mut hash = LoctextResource::hash_loctext_key(&key);
+
+            // Add null terminator
+            key.push(0u8);
+
+            if hash_to_pair.contains_key(&hash) {
+                while hash_to_pair.contains_key(&substituted_hash) {
+                    substituted_hash += 1;
+                }
+
+                println!(
+                    "Key {} resolves to duplicate hash: 0x{:04x}. Using substituted hash 0x{:04x} instead.",
+                    k, hash, substituted_hash
+                );
+
+                collisions.push(HashCollision {
+                    name: k.clone(),
+                    original_hash: hash,
+                    substituted_hash,
+                });
+
+                hash = substituted_hash;
+            }
+
+            // If it STILL contains the hash, print an error
+            if let Some(old_val) = hash_to_pair.insert(hash, KeyPair { key: k, value: v }) {
+                eprintln!(
+                    "Fatal hash collision on collision table insertion. Old value: {:?}",
+                    old_val
+                );
+            }
+        }
+
+        // Sort by hashes (the game does binary search on the values table)
+        let mut sorted_values: Vec<_> = hash_to_pair.iter().collect();
+        sorted_values.sort_by(|(h1, _), (h2, _)| {
+            if h1 < h2 {
                 return Ordering::Less;
-            } else if hash1 > hash2 {
+            } else if h1 > h2 {
                 return Ordering::Greater;
             }
 
             Ordering::Equal
         });
 
-        for (i, (k, v)) in sorted_values.iter().enumerate() {
-            let mut key: Vec<u8> = k.chars().map(|c| c as u8).collect();
-
-            let hash = LoctextResource::hash_loctext_key(&key);
+        for (i, (hash, kp)) in sorted_values.iter().enumerate() {
+            let mut key: Vec<u8> = kp.key.chars().map(|c| c as u8).collect();
 
             // Add null terminator
             key.push(0u8);
 
             // Insert fail => already in set
-            if !hashes.insert(hash) {
-                let hash_user_locator = key_locators.iter().find(|kl| kl.hash == hash).unwrap();
-                let hash_user: String =
-                    String::from_utf8(key_chars[hash_user_locator.char_offset as usize..].to_vec())
-                        .unwrap()
-                        .split('\0')
-                        .take(1)
-                        .collect();
-
-                return Err(AssetParseError::InvalidDataViews(format!(
-                    "Key {} resolves to duplicate hash: 0x{:04x}. Hash already in use by {}",
-                    k, hash, hash_user
-                )));
+            if !hashes.insert(**hash) {
+                return Err(AssetParseError::InvalidDataViews(
+                    "Fatal hash collision when dumping file.".to_string(),
+                ));
             }
 
-            let mut value: Vec<u16> = v.as_str().encode_utf16().collect();
+            let mut value: Vec<u16> = kp.value.as_str().encode_utf16().collect();
             value.push(0u16);
 
+            // Write value chars
             value_locators.push(ValueLocator {
-                hash,
+                hash: **hash,
                 char_offset: value_chars.len() as u32,
             });
 
             value_chars.extend(value);
 
+            // Write key chars
             key_locators.push(KeyLocator {
-                hash,
+                hash: **hash,
                 value_index: (i + 1) as u16,
                 char_offset: key_chars.len() as u32,
             });
             key_chars.extend(key);
+        }
+
+        // Write collision chars
+        let mut col_table_entries = Vec::<CollisionTableEntry>::new();
+        let mut collision_chars = Vec::<u8>::new();
+
+        for collision in &collisions {
+            let mut collision_key: Vec<u8> = collision.name.chars().map(|c| c as u8).collect();
+            collision_key.push(0);
+
+            col_table_entries.push(CollisionTableEntry {
+                name_offset: collision_chars.len() as u32,
+                original_hash: collision.original_hash,
+                substituted_hash: collision.substituted_hash,
+            });
+
+            collision_chars.extend(collision_key);
         }
 
         {
@@ -369,11 +434,42 @@ impl LoctextResource {
                 keys_section.write_u16::<LittleEndian>(key_locator.value_index)?;
                 keys_section.write_u32::<LittleEndian>(key_locator.char_offset)?;
             }
-            keys_section.extend(key_chars.iter().flat_map(|v| v.to_le_bytes()));
+            keys_section.extend(key_chars);
 
             let len = keys_section.len() as u32;
             keys_section[0..4].copy_from_slice(&(len.to_le_bytes()));
         }
+
+        /*
+        let mut collisions_section: Vec<u8> = vec![];
+        {
+            // The size
+            collisions_section.write_u32::<LittleEndian>(0x00)?;
+
+            // Create collisions section
+            collisions_section.write_u32::<LittleEndian>(hashes.len() as u32)?;
+            for collision_locator in collision_locators {
+                collisions_section.write_u16::<LittleEndian>(collision_locator.hash)?;
+                collisions_section.write_u32::<LittleEndian>(collision_locator.char_offset)?;
+            }
+            // Write end of locators sentinel
+            collisions_section.write_u16::<LittleEndian>(0xFFFF)?;
+            collisions_section.write_u32::<LittleEndian>(collision_chars.len() as u32)?;
+            collisions_section.extend(collision_chars.iter().flat_map(|v| v.to_le_bytes()));
+            // Write end of collisions sentinel (an extra empty wchar_t)
+            collisions_section.write_u16::<LittleEndian>(0x0000)?;
+
+            let len = collisions_section.len() as u32;
+            collisions_section[0..4].copy_from_slice(&(len.to_le_bytes()));
+        }
+
+        {
+            // The size
+            collisions_section.write_u32::<LittleEndian>(0x00)?;
+
+            collisions_section.write_u32::<LittleEndian>(collisions.len() as u32)?;
+        }
+        */
 
         let mut lsbl_bytes: Vec<u8> = vec![b'L', b'S', b'B', b'L'];
 
@@ -422,11 +518,19 @@ impl LoctextResource {
         out_bytes.write_u32::<LittleEndian>(0x20)?;
         out_bytes.write_u32::<LittleEndian>(0x0)?;
 
-        // LSBL file ptr
-        out_bytes.write_u32::<LittleEndian>(0x0c)?;
-        // Other section ptrs
-        out_bytes.write_u32::<LittleEndian>(0x0)?;
-        out_bytes.write_u32::<LittleEndian>(0x0)?;
+        if collisions.is_empty() {
+            // LSBL file ptr
+            out_bytes.write_u32::<LittleEndian>(0x0c)?;
+            // Other section ptrs
+            out_bytes.write_u32::<LittleEndian>(0x0)?;
+            out_bytes.write_u32::<LittleEndian>(0x0)?;
+        } else {
+            // LSBL file ptr
+            out_bytes.write_u32::<LittleEndian>(0x0c)?;
+            // Other section ptrs
+            out_bytes.write_u32::<LittleEndian>(0x0)?;
+            out_bytes.write_u32::<LittleEndian>(0x0)?;
+        }
 
         out_bytes.extend(lsbl_bytes);
 
