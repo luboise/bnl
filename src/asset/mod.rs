@@ -16,6 +16,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 pub mod param;
 
 // pub mod marker;
+pub mod aidlist;
 pub mod cuelist;
 pub mod model;
 pub mod script;

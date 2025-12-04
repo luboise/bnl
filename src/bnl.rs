@@ -1,11 +1,12 @@
 use std::{
-    fs,
-    io::{Cursor, Read, Seek, SeekFrom, Write},
+    fs::{self, File},
+    io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom, Write},
     ops::Range,
-    path::{self, PathBuf},
+    path::{self, Path, PathBuf},
 };
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use miniz_oxide::inflate::TINFLStatus;
 
 use crate::{
     VirtualResource,
@@ -40,12 +41,9 @@ pub struct DataView {
 }
 
 impl DataView {
-    pub fn from_cursor<T>(cur: &mut Cursor<T>) -> Result<DataView, std::io::Error>
-    where
-        Cursor<T>: std::io::Read,
-    {
-        let offset = cur.read_u32::<LittleEndian>()?;
-        let size = cur.read_u32::<LittleEndian>()?;
+    pub fn from_reader<R: Read>(reader: &mut R) -> Result<DataView, std::io::Error> {
+        let offset = reader.read_u32::<LittleEndian>()?;
+        let size = reader.read_u32::<LittleEndian>()?;
 
         Ok(DataView { offset, size })
     }
@@ -322,6 +320,13 @@ impl BNLFile {
     ```
     */
     pub fn from_bytes(bnl_bytes: &[u8]) -> Result<Self, BNLError> {
+        if bnl_bytes.len() < 40 {
+            return Err(BNLError::DataReadError(format!(
+                "Length of BNL file must be at least 40 bytes (received {})",
+                bnl_bytes.len()
+            )));
+        }
+
         let mut bytes = bnl_bytes[..40].to_vec();
 
         let mut cur = Cursor::new(bnl_bytes);
@@ -334,10 +339,10 @@ impl BNLFile {
 
         cur.read_exact(&mut header.unknown_2)?;
 
-        header.asset_desc_loc = DataView::from_cursor(&mut cur)?;
-        header.buffer_views_loc = DataView::from_cursor(&mut cur)?;
-        header.buffer_loc = DataView::from_cursor(&mut cur)?;
-        header.descriptor_loc = DataView::from_cursor(&mut cur)?;
+        header.asset_desc_loc = DataView::from_reader(&mut cur)?;
+        header.buffer_views_loc = DataView::from_reader(&mut cur)?;
+        header.buffer_loc = DataView::from_reader(&mut cur)?;
+        header.descriptor_loc = DataView::from_reader(&mut cur)?;
 
         let decompressed_bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&bnl_bytes[40..])?;
         bytes.extend_from_slice(&decompressed_bytes);
@@ -727,6 +732,23 @@ impl BNLFile {
         Ok(())
     }
 
+    pub fn remove_asset(&mut self, name: &str) -> Result<RawAsset, AssetError> {
+        let mut index: Option<usize> = None;
+
+        for (i, asset) in self.assets.iter().enumerate() {
+            if asset.metadata.name() == name {
+                index = Some(i);
+                break;
+            }
+        }
+
+        if let Some(ind) = index {
+            return Ok(self.assets.remove(ind));
+        }
+
+        Err(AssetError::NotFound)
+    }
+
     // TODO: Need to reimplement this for this kind of asset
     /*
     pub fn get_assets_occupying_descriptor_range(
@@ -774,6 +796,80 @@ impl From<miniz_oxide::inflate::DecompressError> for BNLError {
     fn from(_: miniz_oxide::inflate::DecompressError) -> Self {
         BNLError::DecompressionFailure
     }
+}
+
+pub fn get_asset_names_list<P: AsRef<Path>>(path: P) -> Result<Vec<String>, BNLError> {
+    let file = File::open(path.as_ref())?;
+
+    let mut reader = BufReader::new(file);
+
+    {
+        /*
+        reader.read_exact(&mut header.unknown_2)?;
+        header.asset_desc_loc = DataView::from_reader(&mut reader)?;
+        header.buffer_views_loc = DataView::from_reader(&mut reader)?;
+        header.buffer_loc = DataView::from_reader(&mut reader)?;
+        header.descriptor_loc = DataView::from_reader(&mut reader)?;
+
+        let mut compressed_bytes = vec![0u8; header.asset_desc_loc.size as usize];
+        reader.seek(SeekFrom::Start(header.asset_desc_loc.offset as u64))?;
+        reader.read_exact(&mut compressed_bytes)?;
+        */
+    }
+
+    let mut header = BNLHeader {
+        file_count: reader.read_u16::<LittleEndian>()?,
+        flags: reader.read_u8()?,
+        ..Default::default()
+    };
+
+    reader.read_exact(&mut header.unknown_2)?;
+
+    header.asset_desc_loc = DataView::from_reader(&mut reader)?;
+    header.buffer_views_loc = DataView::from_reader(&mut reader)?;
+    header.buffer_loc = DataView::from_reader(&mut reader)?;
+    header.descriptor_loc = DataView::from_reader(&mut reader)?;
+
+    let mut end_bytes = vec![0u8; header.asset_desc_loc.size as usize];
+    reader.read_exact(&mut end_bytes)?;
+
+    let decompressed_bytes = match miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+        &end_bytes,
+        size_of::<AssetDescription>() * header.file_count as usize,
+    ) {
+        Ok(v) => v,
+        Err(e) => match e.status {
+            // Too much input is ok
+            TINFLStatus::HasMoreOutput => e.output,
+            TINFLStatus::FailedCannotMakeProgress
+            | TINFLStatus::BadParam
+            | TINFLStatus::Adler32Mismatch
+            | TINFLStatus::Failed
+            | TINFLStatus::Done
+            | TINFLStatus::NeedsMoreInput => {
+                return Err(BNLError::DecompressionFailure);
+            }
+        },
+    };
+
+    decompressed_bytes
+        .chunks_exact(size_of::<AssetDescription>())
+        .map(|chunk| -> Result<String, BNLError> {
+            let mut string_bytes = Vec::new();
+            chunk
+                .take(size_of::<AssetName>() as u64)
+                .read_until(0x00, &mut string_bytes)
+                .map_err(|_| BNLError::DataReadError("Failed to read asset name.".to_string()))?;
+
+            // Pop null terminator
+            string_bytes.pop();
+
+            let new_str = String::from_utf8(string_bytes)
+                .map_err(|_| BNLError::DataReadError("Failed to read asset name.".to_string()))?;
+
+            Ok(new_str)
+        })
+        .collect()
 }
 
 #[cfg(test)]

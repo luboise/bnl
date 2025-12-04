@@ -388,6 +388,19 @@ impl LoctextResource {
             collision_chars.extend(collision_key);
         }
 
+        let mut collisions_section: Vec<u8> = vec![];
+
+        let collisions_section_base = 0x20;
+
+        for entry in col_table_entries {
+            collisions_section
+                .write_u32::<LittleEndian>(entry.name_offset + collisions_section_base)?;
+            collisions_section.write_u16::<LittleEndian>(entry.original_hash)?;
+            collisions_section.write_u16::<LittleEndian>(entry.substituted_hash)?;
+        }
+
+        collisions_section.extend(collision_chars);
+
         {
             // The size
             values_section.write_u32::<LittleEndian>(0x00)?;
@@ -439,37 +452,6 @@ impl LoctextResource {
             let len = keys_section.len() as u32;
             keys_section[0..4].copy_from_slice(&(len.to_le_bytes()));
         }
-
-        /*
-        let mut collisions_section: Vec<u8> = vec![];
-        {
-            // The size
-            collisions_section.write_u32::<LittleEndian>(0x00)?;
-
-            // Create collisions section
-            collisions_section.write_u32::<LittleEndian>(hashes.len() as u32)?;
-            for collision_locator in collision_locators {
-                collisions_section.write_u16::<LittleEndian>(collision_locator.hash)?;
-                collisions_section.write_u32::<LittleEndian>(collision_locator.char_offset)?;
-            }
-            // Write end of locators sentinel
-            collisions_section.write_u16::<LittleEndian>(0xFFFF)?;
-            collisions_section.write_u32::<LittleEndian>(collision_chars.len() as u32)?;
-            collisions_section.extend(collision_chars.iter().flat_map(|v| v.to_le_bytes()));
-            // Write end of collisions sentinel (an extra empty wchar_t)
-            collisions_section.write_u16::<LittleEndian>(0x0000)?;
-
-            let len = collisions_section.len() as u32;
-            collisions_section[0..4].copy_from_slice(&(len.to_le_bytes()));
-        }
-
-        {
-            // The size
-            collisions_section.write_u32::<LittleEndian>(0x00)?;
-
-            collisions_section.write_u32::<LittleEndian>(collisions.len() as u32)?;
-        }
-        */
 
         let mut lsbl_bytes: Vec<u8> = vec![b'L', b'S', b'B', b'L'];
 
@@ -526,12 +508,13 @@ impl LoctextResource {
             out_bytes.write_u32::<LittleEndian>(0x0)?;
         } else {
             // LSBL file ptr
-            out_bytes.write_u32::<LittleEndian>(0x0c)?;
+            out_bytes.write_u32::<LittleEndian>((0x0c + collisions_section.len()) as u32)?;
             // Other section ptrs
-            out_bytes.write_u32::<LittleEndian>(0x0)?;
-            out_bytes.write_u32::<LittleEndian>(0x0)?;
+            out_bytes.write_u32::<LittleEndian>(0x0c)?;
+            out_bytes.write_u32::<LittleEndian>(collisions.len() as u32)?;
         }
 
+        out_bytes.extend(collisions_section);
         out_bytes.extend(lsbl_bytes);
 
         Ok(out_bytes)
