@@ -168,6 +168,58 @@ impl AssetMetadata {
     pub fn unk_1(&self) -> u32 {
         self.unk_1
     }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, AssetParseError> {
+        if bytes.len() < size_of::<AssetMetadata>() {
+            return Err(AssetParseError::InputTooSmall);
+        }
+
+        if bytes.len() > size_of::<AssetMetadata>() {
+            println!(
+                "Warning: parsing AssetMetadata from slice of size {}, but an AssetMetadata struct is only {} bytes in size. there may be a logic error in the program, and this should be checked.",
+                bytes.len(),
+                size_of::<AssetMetadata>()
+            );
+        }
+
+        let mut cur = Cursor::new(bytes);
+
+        let mut name: AssetName = [0u8; 128];
+        cur.read_exact(&mut name)?;
+
+        let asset_type_raw = cur.read_u32::<LittleEndian>()?;
+        let asset_type: AssetType = asset_type_raw.try_into().map_err(|_| {
+            AssetParseError::InvalidDataViews(format!("Invalid asset type: {}", asset_type_raw))
+        })?;
+
+        Ok(Self {
+            name,
+            asset_type,
+            unk_1: cur.read_u32::<LittleEndian>()?,
+            unk_2: cur.read_u32::<LittleEndian>()?,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        /*
+             pub name: AssetName,
+        pub asset_type: AssetType,
+        pub unk_1: u32,
+        pub unk_2: u32,
+        */
+
+        let mut v = vec![0u8; 0x80];
+        v[0..0x80].copy_from_slice(&self.name);
+
+        v.write_u32::<LittleEndian>(self.asset_type.into())
+            .expect("Failed to write to buffer");
+        v.write_u32::<LittleEndian>(self.unk_1)
+            .expect("Failed to write to buffer");
+        v.write_u32::<LittleEndian>(self.unk_2)
+            .expect("Failed to write to buffer");
+
+        v
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +261,17 @@ impl RawAsset {
             })
             .ok_or(AssetParseError::FileNotFound("descriptor".to_string()))?;
 
+        let metadata_path = contents
+            .iter()
+            .find(|p| {
+                if let Some(file_name) = p.file_name() {
+                    file_name == "metadata"
+                } else {
+                    false
+                }
+            })
+            .ok_or(AssetParseError::FileNotFound("metadata".to_string()))?;
+
         let resource_paths = contents.iter().filter(|p| {
             if let Some(file_name) = p.file_name() {
                 file_name.to_str().unwrap().starts_with("resource")
@@ -216,6 +279,9 @@ impl RawAsset {
                 false
             }
         });
+
+        let metadata_bytes =
+            fs::read(metadata_path).map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
 
         let descriptor_bytes =
             fs::read(descriptor_path).map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
@@ -230,18 +296,7 @@ impl RawAsset {
             false => Some(resource_files),
         };
 
-        let metadata = AssetMetadata::new(
-            descriptor_path
-                .parent()
-                .unwrap()
-                .file_name()
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            AssetType::ResTexture,
-            0,
-            0,
-        );
+        let metadata = AssetMetadata::from_bytes(&metadata_bytes)?;
 
         Ok(Self {
             metadata,
@@ -346,6 +401,7 @@ impl BNLFile {
 
         let decompressed_bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&bnl_bytes[40..])?;
         bytes.extend_from_slice(&decompressed_bytes);
+        std::fs::write("TEST_BYTES", &bytes).expect("Failed to write test bytes.");
 
         cur = Cursor::new(&bytes);
 
@@ -426,6 +482,8 @@ impl BNLFile {
         let mut buffer_views_section: Vec<u8> = vec![];
         let mut buffer_section: Vec<u8> = vec![];
         let mut descriptors_section: Vec<u8> = vec![];
+
+        self.assets.sort_by_key(|v| v.name().to_string());
 
         for (i, asset) in self.assets.iter().enumerate() {
             let metadata = asset.metadata.clone();

@@ -7,11 +7,13 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::{
     VirtualResource,
     asset::{
-        AssetDescriptor, AssetLike, AssetParseError, AssetType,
+        AssetDescriptor, AssetError, AssetLike, AssetParseError, AssetType,
         param::{HasParams, Param, ParamsShape},
         script::ops::{KnownOpcode, ScriptOpcode},
     },
 };
+
+use super::param::KnownUnknown::{Known, Unknown};
 
 #[derive(Debug, Clone)]
 pub struct ScriptDescriptor {
@@ -61,6 +63,28 @@ impl HasParams for ScriptOperation {
 }
 
 impl ScriptOperation {
+    pub fn new<B: AsRef<[u8]>>(
+        opcode: ScriptOpcode,
+        operand_bytes: B,
+    ) -> Result<ScriptOperation, ScriptError> {
+        let data = operand_bytes.as_ref();
+
+        let op_size = match opcode {
+            Known(opcode) => opcode.operands_size(),
+            Unknown(_) => data.len(),
+        };
+
+        if op_size != data.len() {
+            return Err(ScriptError::SizeMismatch);
+        }
+
+        Ok(Self {
+            size: (8 + data.len()) as u32,
+            opcode,
+            operand_bytes: data.to_owned(),
+        })
+    }
+
     pub fn size(&self) -> u32 {
         self.size
     }

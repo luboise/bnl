@@ -348,7 +348,7 @@ pub struct AssetDescription {
 
 // Taken from project_grabbed
 // https://github.com/x1nixmzeng/project-grabbed
-#[derive(Debug, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u32)]
 pub enum AssetType {
     ResTexture = 1,
@@ -384,6 +384,57 @@ pub enum AssetType {
     ResCount, // This will automatically take the next value (30)
 }
 
+impl Ord for AssetType {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        let x: u32 = (*self).into();
+        let y: u32 = (*other).into();
+        x.cmp(&y)
+    }
+}
+
+impl PartialOrd for AssetType {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Display for AssetType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                AssetType::ResTexture => "Texture",
+                AssetType::ResAnim => "Anim",
+                AssetType::ResUnknown3 => "Unknown3",
+                AssetType::ResModel => "Model",
+                AssetType::ResAnimEvents => "AnimEvents",
+                AssetType::ResCutscene => "Cutscene",
+                AssetType::ResCutsceneEvents => "CutsceneEvents",
+                AssetType::ResMisc => "Misc",
+                AssetType::ResActorGoals => "ActorGoals",
+                AssetType::ResMarker => "Marker",
+                AssetType::ResFxCallout => "FxCallout",
+                AssetType::ResAidList => "AidList",
+                AssetType::ResLoctext => "Loctext",
+                AssetType::ResXSoundbank => "XSoundbank",
+                AssetType::ResXDSP => "XDSP",
+                AssetType::ResXCueList => "XCueList",
+                AssetType::ResFont => "Font",
+                AssetType::ResGhoulybox => "Ghoulybox",
+                AssetType::ResGhoulyspawn => "Ghoulyspawn",
+                AssetType::ResScript => "Script",
+                AssetType::ResActorAttribs => "ActorAttribs",
+                AssetType::ResEmitter => "Emitter",
+                AssetType::ResParticle => "Particle",
+                AssetType::ResRumble => "Rumble",
+                AssetType::ResShakeCam => "ShakeCam",
+                AssetType::ResCount => "Count",
+            }
+        )
+    }
+}
+
 impl AssetDescription {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, std::io::Error> {
         let mut cur = Cursor::new(&bytes);
@@ -413,7 +464,7 @@ impl AssetDescription {
             resource_size: cur.read_u32::<LittleEndian>()?,
         };
 
-        Ok(asset_description.into())
+        Ok(asset_description)
     }
 
     pub fn to_bytes(&self) -> [u8; ASSET_DESCRIPTION_SIZE] {
