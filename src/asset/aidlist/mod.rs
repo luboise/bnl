@@ -8,7 +8,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 
 use crate::{
     VirtualResource,
-    asset::{AssetDescriptor, AssetLike, AssetName, AssetParseError, AssetType},
+    asset::{AssetDescriptor, AssetLike, AssetName, AssetParseError, AssetType, Dump},
 };
 
 #[derive(Debug, Clone)]
@@ -105,5 +105,26 @@ impl AssetLike for AidList {
 
     fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
         None
+    }
+}
+
+impl Dump for AidList {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
+        {
+            let out_file = File::create(dump_path)?;
+
+            let mut writer = BufWriter::new(out_file);
+
+            writer.write_all(
+                &self
+                    .asset_ids
+                    .join("\n")
+                    .chars()
+                    .map(|c| c as u8)
+                    .collect::<Vec<u8>>(),
+            )?;
+        }
+
+        Ok(())
     }
 }

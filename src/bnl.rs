@@ -401,7 +401,6 @@ impl BNLFile {
 
         let decompressed_bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&bnl_bytes[40..])?;
         bytes.extend_from_slice(&decompressed_bytes);
-        std::fs::write("TEST_BYTES", &bytes).expect("Failed to write test bytes.");
 
         cur = Cursor::new(&bytes);
 
