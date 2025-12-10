@@ -339,7 +339,9 @@ fn main() {
             file_2,
             names_only,
             ignore_order,
-        } => {}
+        } => {
+            println!("Diff feature coming soon.");
+        }
     }
 }
 
