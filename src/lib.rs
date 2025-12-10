@@ -12,6 +12,7 @@ use std::{cmp, fmt::Display};
 use crate::asset::DataViewList;
 
 pub mod game;
+pub mod modding;
 pub mod xsb;
 
 #[derive(Debug)]
