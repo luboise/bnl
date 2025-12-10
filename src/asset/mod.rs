@@ -298,6 +298,13 @@ pub trait Dump {
     fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error>;
 }
 
+/// Parses a naturally serialised version of an asset. This is NOT used with descriptors, but
+/// instead with any human readable output formats. For example, an AidList resource as a text file
+/// with each AID being on a separate line.
+pub trait Parse: Sized {
+    fn parse<P: AsRef<Path>>(parse_path: P) -> Result<Self, AssetParseError>;
+}
+
 /// Describes how a given asset is structured. Typically, an AssetDescriptor has information about how
 /// to read an asset from its associated resources, as well as attributes of that asset. For
 /// example, a [`texture::TextureDescriptor`] knows the width and height of its associated texture
@@ -332,6 +339,8 @@ pub trait AssetLike: Sized {
 }
 
 pub type AssetName = [u8; 128];
+pub const MAX_ASSET_NAME_LENGTH: usize = size_of::<AssetName>() - 1;
+
 pub const ASSET_DESCRIPTION_SIZE: usize = 0xa0;
 
 #[derive(Clone)]
@@ -432,6 +441,41 @@ impl Display for AssetType {
                 AssetType::ResCount => "Count",
             }
         )
+    }
+}
+
+impl TryFrom<&str> for AssetType {
+    type Error = AssetError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            "texture" => Ok(AssetType::ResTexture),
+            "anim" => Ok(AssetType::ResAnim),
+            "unknown3" => Ok(AssetType::ResUnknown3),
+            "model" => Ok(AssetType::ResModel),
+            "animevent" => Ok(AssetType::ResAnimEvents),
+            "cutscene" => Ok(AssetType::ResCutscene),
+            "cutsceneevent" => Ok(AssetType::ResCutsceneEvents),
+            "misc" => Ok(AssetType::ResMisc),
+            "actorgoal" => Ok(AssetType::ResActorGoals),
+            "marker" => Ok(AssetType::ResMarker),
+            "callout" => Ok(AssetType::ResFxCallout),
+            "aidlist" => Ok(AssetType::ResAidList),
+            "loctext" => Ok(AssetType::ResLoctext),
+            "soundbank" => Ok(AssetType::ResXSoundbank),
+            "dsp" => Ok(AssetType::ResXDSP),
+            "cue" => Ok(AssetType::ResXCueList),
+            "font" => Ok(AssetType::ResFont),
+            "ghoulybox" => Ok(AssetType::ResGhoulybox),
+            "ghoulyspawn" => Ok(AssetType::ResGhoulyspawn),
+            "script" => Ok(AssetType::ResScript),
+            "actorattribs" => Ok(AssetType::ResActorAttribs),
+            "emitter" => Ok(AssetType::ResEmitter),
+            "particle" => Ok(AssetType::ResParticle),
+            "rumble" => Ok(AssetType::ResRumble),
+            "shakecam" => Ok(AssetType::ResShakeCam),
+            _ => Err(AssetError::TypeMismatch),
+        }
     }
 }
 

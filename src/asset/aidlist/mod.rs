@@ -1,14 +1,15 @@
 use std::{
-    fs::File,
-    io::{BufWriter, Cursor, Write},
+    fs::{File, read_to_string},
+    io::{BufWriter, Write},
     path::Path,
 };
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-
 use crate::{
     VirtualResource,
-    asset::{AssetDescriptor, AssetLike, AssetName, AssetParseError, AssetType, Dump},
+    asset::{
+        AssetDescriptor, AssetLike, AssetName, AssetParseError, AssetType, Dump,
+        MAX_ASSET_NAME_LENGTH, Parse,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -41,8 +42,12 @@ impl AssetDescriptor for AidListDescriptor {
         Ok(Self {
             asset_ids: data
                 .chunks_exact(128)
-                .map(|chunk| (chunk[0..128].try_into().unwrap()))
-                .collect::<Vec<AssetName>>(),
+                .map(|chunk| {
+                    chunk[0..128]
+                        .try_into()
+                        .map_err(|_| AssetParseError::ErrorParsingDescriptor)
+                })
+                .collect::<Result<Vec<AssetName>, _>>()?,
         })
     }
 
@@ -66,13 +71,24 @@ impl AssetLike for AidList {
         descriptor: &Self::Descriptor,
         _virtual_res: &VirtualResource,
     ) -> Result<Self, AssetParseError> {
-        let mut strings = Vec::new();
+        let mut strings: Vec<String> = Vec::new();
 
         for asset_id in &descriptor.asset_ids {
-            strings.push(
-                String::from_utf8(asset_id.to_vec())
-                    .map_err(|_| AssetParseError::ErrorParsingDescriptor)?,
-            );
+            match asset_id.iter().position(|c| *c == 0) {
+                None => {
+                    return Err(AssetParseError::InvalidDataViews(format!(
+                        "No null terminating char in asset id {}",
+                        String::from_utf8(asset_id.to_vec()).unwrap_or("STRING ERROR".to_string())
+                    )));
+                }
+
+                Some(length) => {
+                    strings.push(
+                        String::from_utf8(asset_id[..length].to_vec())
+                            .map_err(|_| AssetParseError::ErrorParsingDescriptor)?,
+                    );
+                }
+            }
         }
 
         Ok(Self { asset_ids: strings })
@@ -126,5 +142,25 @@ impl Dump for AidList {
         }
 
         Ok(())
+    }
+}
+
+impl Parse for AidList {
+    fn parse<P: AsRef<Path>>(parse_path: P) -> Result<Self, AssetParseError> {
+        let asset_ids: Vec<String> = read_to_string(parse_path)?
+            .lines()
+            .filter(|line| !line.is_empty())
+            .map(|asset_id| -> Result<String, AssetParseError> {
+                if asset_id.len() <= (MAX_ASSET_NAME_LENGTH) {
+                    Ok(asset_id.to_string())
+                } else {
+                    Err(AssetParseError::InvalidDataViews(
+                        "Input too large.".to_string(),
+                    ))
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self { asset_ids })
     }
 }
