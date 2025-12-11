@@ -20,12 +20,6 @@ pub struct AssetOverride {
 }
 
 #[derive(Debug)]
-pub struct Mod {
-    spec: ModSpecification,
-    overrides: HashMap<String, AssetOverride>,
-}
-
-#[derive(Debug)]
 pub enum ModErrorType {
     SpecificationError,
     AssetOverrideError,
@@ -55,7 +49,23 @@ impl From<AssetParseError> for ModError {
     }
 }
 
+#[derive(Debug)]
+pub struct Mod {
+    spec: ModSpecification,
+    overrides: HashMap<String, AssetOverride>,
+}
+
 impl Mod {
+    pub fn new<S: AsRef<str>>(name: S) -> Self {
+        Self {
+            spec: ModSpecification {
+                version: 0,
+                name: name.as_ref().to_string(),
+            },
+            overrides: Default::default(),
+        }
+    }
+
     /// Reads a mod on disk from a path
     pub fn from_dir<P: AsRef<Path>>(mod_dir: P) -> Result<Mod, ModError> {
         // Locate dirs
@@ -190,6 +200,10 @@ impl Mod {
 
     pub fn overrides(&self) -> &HashMap<String, AssetOverride> {
         &self.overrides
+    }
+
+    pub fn overrides_mut(&mut self) -> &mut HashMap<String, AssetOverride> {
+        &mut self.overrides
     }
 
     /// Applies a Mod to an existing BNL file in memory. On success, returns the number of assets
