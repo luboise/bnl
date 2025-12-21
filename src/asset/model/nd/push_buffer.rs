@@ -110,13 +110,25 @@ impl NdNode for NdPushBuffer {
         let mesh: &mut gltf::Mesh = match ctx.gltf.meshes_mut().get_mut(index) {
             Some(val) => val,
             None => {
-                let new_mesh = gltf::Mesh::new("Idk Mesh".to_string());
-
+                let new_mesh = gltf::Mesh::new("New Mesh".to_string());
                 let new_mesh_index = ctx.gltf.add_mesh(new_mesh);
 
-                ctx.current_node()
+                let new_node = gltf::Node::new(Some("Mesh Node".to_string()));
+                let new_node_index = ctx.gltf.add_node(new_node);
+
+                ctx.gltf
+                    .nodes_mut()
+                    .get_mut(new_node_index as usize)
                     .unwrap()
                     .set_mesh_index(Some(new_mesh_index));
+
+                if let Some(skin_index) = ctx.current_skin {
+                    ctx.gltf
+                        .nodes_mut()
+                        .get_mut(new_node_index as usize)
+                        .unwrap()
+                        .set_skin_index(Some(skin_index));
+                }
 
                 ctx.gltf
                     .meshes_mut()

@@ -35,7 +35,7 @@ use std::{
 use serde::{Serialize, ser::SerializeMap};
 
 use crate::asset::{
-    model::nd::{push_buffer::DrawCall, shader::NdShaderParam2Payload},
+    model::nd::{push_buffer::DrawCall, shader::NdShaderParam2Payload, skeleton::Bone},
     param::KnownUnknown,
 };
 
@@ -572,7 +572,40 @@ impl Nd {
                         sub_payload,
                     }))
                 }
-                KnownNdType::Skeleton => Ok(Nd::Skeleton(NdSkeleton { header })),
+                KnownNdType::Skeleton => {
+                    let num_bones = cur.read_u32::<LittleEndian>()?;
+                    let bones_ptr = cur.read_u32::<LittleEndian>()?;
+
+                    let bones = if bones_ptr != 0 && num_bones > 0 {
+                        let mut bones = Vec::with_capacity(num_bones as usize);
+
+                        cur.seek(SeekFrom::Start(bones_ptr as u64))?;
+
+                        for _ in 0..(num_bones as usize) {
+                            bones.push(Bone {
+                                parent_id: cur.read_u16::<LittleEndian>()?,
+                                id: cur.read_u16::<LittleEndian>()?,
+                                local_transform: [
+                                    cur.read_f32::<LittleEndian>()?,
+                                    cur.read_f32::<LittleEndian>()?,
+                                    cur.read_f32::<LittleEndian>()?,
+                                ],
+                                global_transform: [
+                                    cur.read_f32::<LittleEndian>()?,
+                                    cur.read_f32::<LittleEndian>()?,
+                                    cur.read_f32::<LittleEndian>()?,
+                                ],
+                                sentinel: cur.read_u32::<LittleEndian>()?.to_le_bytes(),
+                            });
+                        }
+
+                        bones
+                    } else {
+                        vec![]
+                    };
+
+                    Ok(Nd::Skeleton(NdSkeleton { header, bones }))
+                }
                 KnownNdType::Shader2 => Ok(Nd::Shader2(NdShader2 { header })),
                 KnownNdType::VertexShader => Ok(Nd::VertexShader(NdVertexShader { header })),
             }
