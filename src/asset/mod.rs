@@ -17,12 +17,12 @@ pub mod param;
 
 // pub mod marker;
 pub mod aidlist;
+pub mod anim;
 pub mod cuelist;
+pub mod loctext;
 pub mod model;
 pub mod script;
 pub mod texture;
-
-pub mod loctext;
 
 #[derive(Debug, Clone)]
 pub struct Asset<AL: AssetLike> {
