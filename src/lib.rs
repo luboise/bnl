@@ -2,6 +2,8 @@ pub(crate) mod d3d;
 
 pub(crate) mod images;
 
+pub mod utils;
+
 pub mod asset;
 
 mod bnl;
