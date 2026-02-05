@@ -223,6 +223,38 @@ impl AnimDescriptor {
     pub fn bits_per_keyframe_exact(&self) -> usize {
         self.bits_per_channel.iter().map(|v| *v as usize).sum()
     }
+
+    pub fn inverse_divisor(&self) -> f32 {
+        self.inverse_divisor
+    }
+
+    pub fn duration(&self) -> f32 {
+        self.duration
+    }
+
+    pub fn precision_specifiers(&self) -> &PrecisionSpecifiers {
+        &self.precision_specifiers
+    }
+
+    pub fn pack_formats(&self) -> &[PackFormat] {
+        &self.pack_formats
+    }
+
+    pub fn shorts(&self) -> &[i16] {
+        &self.shorts
+    }
+
+    pub fn bits_per_channel(&self) -> &[u8] {
+        &self.bits_per_channel
+    }
+
+    pub fn transforms_per_keyframe(&self) -> u16 {
+        self.transforms_per_keyframe
+    }
+
+    pub fn num_keyframes(&self) -> u16 {
+        self.num_keyframes
+    }
 }
 
 impl std::fmt::Debug for AnimDescriptor {
@@ -432,16 +464,16 @@ impl AnimKeyframe {
 }
 
 #[derive(Debug, Clone)]
-pub struct Anim {
-    descriptor: AnimDescriptor,
-    keyframes: Vec<AnimKeyframe>,
-}
-
-#[derive(Debug, Clone)]
 pub enum AnimError {
     SizeMismatch,
     InvalidInput,
     UnsupportedOutputType,
+}
+
+#[derive(Debug, Clone)]
+pub struct Anim {
+    descriptor: AnimDescriptor,
+    keyframes: Vec<AnimKeyframe>,
 }
 
 impl Anim {
@@ -458,6 +490,23 @@ impl Anim {
 
     pub fn keyframes(&self) -> &[AnimKeyframe] {
         &self.keyframes
+    }
+
+    pub fn get_channels(&self) -> Vec<Vec<NodeTransform>> {
+        let num_channels = self
+            .keyframes
+            .iter()
+            .fold(0usize, |init, kf| init.max(kf.transforms.len()));
+
+        let mut channels = vec![vec![]; num_channels];
+
+        for keyframe in &self.keyframes {
+            for (i, transform) in keyframe.as_node_transforms().into_iter().enumerate() {
+                channels[i].push(transform);
+            }
+        }
+
+        channels
     }
 }
 
@@ -597,57 +646,4 @@ impl AssetLike for Anim {
     fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
         None
     }
-}
-
-#[derive(Clone)]
-pub struct RGBAImage {
-    width: usize,
-    height: usize,
-    bytes: Vec<u8>,
-}
-
-impl RGBAImage {
-    pub fn width(&self) -> usize {
-        self.width
-    }
-
-    pub fn height(&self) -> usize {
-        self.height
-    }
-
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
-    }
-
-    pub fn dump_png_bytes<W: Write>(&self, w: &mut W) -> Result<(), AnimError> {
-        let mut encoder = png::Encoder::new(w, self.width as u32, self.height as u32);
-
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-
-        // encoder.set_source_gamma(png::ScaledFloat::new(1.0 / 2.2));
-        /*
-        let chroma = png::SourceChromaticities::new(
-            (0.3127, 0.3290), // red
-            (0.6400, 0.3300), // green
-            (0.3000, 0.6000), // blue
-            (0.1500, 0.0600), // white
-        );
-        encoder.set_source_chromaticities(chroma);
-        */
-
-        let mut writer = encoder.write_header().unwrap();
-
-        writer
-            .write_image_data(&self.bytes)
-            .map_err(|_| AnimError::InvalidInput)?;
-        writer.finish().expect("Unable to close writer");
-
-        Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }

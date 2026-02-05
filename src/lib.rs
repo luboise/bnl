@@ -9,6 +9,8 @@ pub mod asset;
 mod bnl;
 pub use bnl::*; // Want to make it just bnl::*, rather than bnl::bnl::*
 
+pub use gltf_writer;
+
 use std::{cmp, fmt::Display};
 
 use crate::asset::DataViewList;
