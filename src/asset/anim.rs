@@ -1,4 +1,4 @@
-use std::io::{Cursor, Read, Write};
+use std::io::{Cursor, Read};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 use gltf_writer::gltf::NodeTransform;
@@ -476,6 +476,13 @@ pub struct Anim {
     keyframes: Vec<AnimKeyframe>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct BoneAnimChannel {
+    pub translation: Option<Vec<[f32; 3]>>,
+    pub rotation: Option<Vec<[f32; 4]>>,
+    pub scale: Option<Vec<[f32; 3]>>,
+}
+
 impl Anim {
     pub fn new(descriptor: AnimDescriptor) -> Self {
         Anim {
@@ -492,21 +499,86 @@ impl Anim {
         &self.keyframes
     }
 
-    pub fn get_channels(&self) -> Vec<Vec<NodeTransform>> {
+    // pub fn get_channels(&self) -> Vec<Vec<NodeTransform>> {
+    //     let num_channels = self
+    //         .keyframes
+    //         .iter()
+    //         .fold(0usize, |acc, kf| acc.max(kf.transforms.len()));
+    //
+    //     let mut channels = vec![vec![]; num_channels];
+    //
+    //     for keyframe in &self.keyframes {
+    //         for (i, transform) in keyframe.as_node_transforms().into_iter().enumerate() {
+    //             channels[i].push(transform);
+    //         }
+    //     }
+    //
+    //     channels
+    // }
+
+    pub fn get_bone_anim_channels(&self) -> Vec<BoneAnimChannel> {
         let num_channels = self
             .keyframes
             .iter()
-            .fold(0usize, |init, kf| init.max(kf.transforms.len()));
+            .fold(0usize, |acc, kf| acc.max(kf.transforms.len()));
 
-        let mut channels = vec![vec![]; num_channels];
+        let mut bone_anim_channels = vec![BoneAnimChannel::default(); num_channels];
 
-        for keyframe in &self.keyframes {
-            for (i, transform) in keyframe.as_node_transforms().into_iter().enumerate() {
-                channels[i].push(transform);
-            }
+        if let Some(keyframe) = self.keyframes.first() {
+            keyframe
+                .transforms
+                .iter()
+                .take(num_channels)
+                .enumerate()
+                .for_each(|(i, transform)| {
+                    if transform.tx.is_some() || transform.ty.is_some() || transform.tz.is_some() {
+                        bone_anim_channels[i].translation = Some(vec![]);
+                    }
+
+                    // if transform.qx.is_some() || transform.qy.is_some() || transform.qz.is_some() {
+                    //     bone_anim_channels[i].rotation = Some(vec![]);
+                    // }
+
+                    if transform.sx.is_some() || transform.sy.is_some() || transform.sz.is_some() {
+                        bone_anim_channels[i].scale = Some(vec![]);
+                    }
+                })
         }
 
-        channels
+        for keyframe in &self.keyframes {
+            keyframe
+                .transforms
+                .iter()
+                .take(num_channels)
+                .enumerate()
+                .for_each(|(i, transform)| {
+                    if transform.tx.is_some() || transform.ty.is_some() || transform.tz.is_some() {
+                        bone_anim_channels[i].translation.as_mut().unwrap().push([
+                            transform.tx.unwrap_or(0.0),
+                            transform.ty.unwrap_or(0.0),
+                            transform.tz.unwrap_or(0.0),
+                        ]);
+                    }
+
+                    // if transform.qx.is_some() || transform.qy.is_some() || transform.qz.is_some() {
+                    //     bone_anim_channels[i].translation.as_mut().unwrap().push([
+                    //         transform.qx.unwrap_or(0.0),
+                    //         transform.qy.unwrap_or(0.0),
+                    //         transform.qz.unwrap_or(0.0),
+                    //     ]);
+                    // }
+
+                    if transform.sx.is_some() || transform.sy.is_some() || transform.sz.is_some() {
+                        bone_anim_channels[i].scale.as_mut().unwrap().push([
+                            transform.sx.unwrap_or(1.0),
+                            transform.sy.unwrap_or(1.0),
+                            transform.sz.unwrap_or(1.0),
+                        ]);
+                    }
+                })
+        }
+
+        bone_anim_channels
     }
 }
 

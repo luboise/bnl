@@ -45,6 +45,8 @@ pub struct NdGltfContext {
     pub(crate) gltf: Gltf,
     pub(crate) positions_accessor: Option<GltfIndex>,
     pub(crate) uv_accessor: Option<GltfIndex>,
+    pub(crate) skin_accessor: Option<GltfIndex>,
+    pub(crate) skin_weight_accessor: Option<GltfIndex>,
 
     pub(crate) current_skin: Option<GltfIndex>,
 
@@ -84,7 +86,7 @@ impl NdGltfContext {
             return None;
         }
 
-        Some(*self.node_stack.get(self.node_stack.len() - 1).unwrap())
+        Some(*self.node_stack.last().unwrap())
     }
 }
 

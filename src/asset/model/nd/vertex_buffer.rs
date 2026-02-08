@@ -1,3 +1,5 @@
+use gltf_writer::gltf::{Accessor, BufferView};
+
 use super::prelude::*;
 
 #[derive(Debug, Clone, Serialize)]
@@ -46,7 +48,7 @@ impl NdNode for NdVertexBuffer {
             .get_bytes(min as usize, res_size)
             .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
-        let gb = gltf::Buffer::new(res_bytes);
+        let gb = gltf::Buffer::new(&res_bytes);
         let buffer_index = ctx.gltf.add_buffer(gb);
 
         for res_view in self.resource_views() {
@@ -59,7 +61,7 @@ impl NdNode for NdVertexBuffer {
                 res_view.start() as usize,
                 res_view.len(),
                 Some(res_view.stride() as usize),
-                None,
+                Some(34962),
             ));
 
             if res_view.res_type() == VertexBufferViewType::Vertex
@@ -69,13 +71,13 @@ impl NdNode for NdVertexBuffer {
                     buffer_view_index,
                     0,
                     gltf::AccessorDataType::F32,
-                    res_view.len() / 12,
+                    res_view.num_entries(),
                     gltf::AccessorComponentCount::VEC3,
                 ));
 
                 ctx.positions_accessor = Some(accessor_index);
             } else {
-                match res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
+                match res_view.add_to_gltf(&mut ctx.gltf, &res_bytes, buffer_view_index) {
                     Ok(accessor_index) => {
                         if res_view.res_type() == VertexBufferViewType::UV
                             && ctx.uv_accessor.is_none()
@@ -91,9 +93,12 @@ impl NdNode for NdVertexBuffer {
                             */
 
                             ctx.uv_accessor = Some(accessor_index);
+                        } else if res_view.res_type() == VertexBufferViewType::Skin {
+                            ctx.skin_accessor = Some(accessor_index)
+                        } else if res_view.res_type() == VertexBufferViewType::SkinWeight {
+                            ctx.skin_weight_accessor = Some(accessor_index)
                         }
                     }
-
                     Err(e) => {
                         eprintln!(
                             "Unable to add bv {} to gltf file.\nError: {}",
@@ -174,6 +179,7 @@ impl VertexBufferResourceView {
     pub(crate) fn add_to_gltf(
         &self,
         gltf: &mut gltf::Gltf,
+        buffer_bytes: &[u8],
         buffer_view_index: GltfIndex,
     ) -> Result<GltfIndex, std::io::Error> {
         match self.res_type {
@@ -192,22 +198,107 @@ impl VertexBufferResourceView {
             VertexBufferViewType::UV => {
                 let num_vertices = self.view_size / 8;
 
-                Ok(gltf.add_accessor(gltf::Accessor::new(
+                let accessor_index = gltf.add_accessor(gltf::Accessor::new(
                     buffer_view_index,
                     // self.view_start as usize,
                     0,
                     gltf::AccessorDataType::F32,
                     num_vertices as usize,
                     gltf::AccessorComponentCount::VEC2,
-                )))
+                ));
+
+                println!("Vertices accessor at index {accessor_index}");
+                Ok(accessor_index)
+            }
+
+            // Skin must be converted to u8 or u16 stream for gltf according to specification
+            //
+            // "JOINTS_n: unsigned byte or unsigned short"
+            // https://registry.khronos.org/glTF/specs/2.0/glTF-2.0.html#skinned-mesh-attributes
+            VertexBufferViewType::Skin => {
+                // Convert [f32, f32] to [u16, u16, u16, u16], padding extra missing indices with 0
+                let u16_bytes = buffer_bytes
+                    [self.view_start as usize..(self.view_start + self.view_size) as usize]
+                    .chunks_exact(self.stride.into())
+                    .flat_map(|chunk| {
+                        let mut skin_indices = [0u16; 4];
+                        chunk
+                            .chunks_exact(4)
+                            .take(4)
+                            .enumerate()
+                            .for_each(|(i, c)| {
+                                // TODO: Remove this and actually figure out bone mapping
+                                let val = f32::from_le_bytes(c.try_into().unwrap()) as u16;
+                                skin_indices[i] = if val == 24 {
+                                    1
+                                } else if val == 27 {
+                                    2
+                                } else {
+                                    val
+                                };
+                            });
+
+                        skin_indices
+                    })
+                    .flat_map(|short| short.to_le_bytes())
+                    .collect::<Vec<u8>>();
+
+                let buf_index = gltf.add_buffer(gltf_writer::gltf::Buffer::new(&u16_bytes));
+                let bv = gltf.add_buffer_view(BufferView::new(
+                    buf_index,
+                    0,
+                    u16_bytes.len(),
+                    None,
+                    Some(34962),
+                ));
+
+                let accessor_index = gltf.add_accessor(Accessor::new(
+                    bv,
+                    0,
+                    gltf::AccessorDataType::U16,
+                    self.num_entries(),
+                    gltf::AccessorComponentCount::VEC4,
+                ));
+                println!("Skin accessor at index {accessor_index}");
+                Ok(accessor_index)
+            }
+
+            VertexBufferViewType::SkinWeight => {
+                let skin_weight_bytes = buffer_bytes
+                    [(self.view_start) as usize..(self.view_start + self.view_size) as usize]
+                    .chunks_exact(8)
+                    .flat_map(|chunk| {
+                        let mut v = vec![0u8; 16];
+
+                        v[0..8].copy_from_slice(chunk);
+                        v
+                    })
+                    .collect::<Vec<_>>();
+
+                let buf_index = gltf.add_buffer(gltf_writer::gltf::Buffer::new(&skin_weight_bytes));
+                let bv = gltf.add_buffer_view(BufferView::new(
+                    buf_index,
+                    0,
+                    skin_weight_bytes.len(),
+                    None,
+                    Some(34962),
+                ));
+
+                let accessor_index = gltf.add_accessor(Accessor::new(
+                    bv,
+                    0,
+                    gltf::AccessorDataType::F32,
+                    self.num_entries(),
+                    gltf::AccessorComponentCount::VEC4,
+                ));
+                println!("Skin weights accessor at index {accessor_index}");
+                Ok(accessor_index)
             }
             VertexBufferViewType::Unknown10
             | VertexBufferViewType::Unknown11
-            | VertexBufferViewType::SkinWeight
             | VertexBufferViewType::Unknown14
             | VertexBufferViewType::Unknown15
             | VertexBufferViewType::Unknown16
-            | VertexBufferViewType::Skin
             | VertexBufferViewType::KnknownFF => Err(std::io::Error::other(format!(
                 "VertexBufferViewType {:?} not implemented.",
                 self.res_type
@@ -234,6 +325,12 @@ impl VertexBufferResourceView {
 
     pub fn end(&self) -> u32 {
         self.view_start + self.view_size
+    }
+
+    /// Number of entries in this resource view
+    /// Equal by length / stride
+    pub fn num_entries(&self) -> usize {
+        (self.view_size / u32::from(self.stride)) as usize
     }
 
     pub fn res_type(&self) -> VertexBufferViewType {

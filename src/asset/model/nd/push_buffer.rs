@@ -60,7 +60,8 @@ impl NdNode for NdPushBuffer {
             byte_offset: 0,
             byte_length: index_buffer.len(),
             byte_stride: None,
-            target: None,
+            // 34963 -> ELEMENT_ARRAY_BUFFER
+            target: Some(34963),
         });
 
         let mut primitives = Vec::new();
@@ -100,6 +101,14 @@ impl NdNode for NdPushBuffer {
                 primitive.set_attribute(gltf::VertexAttribute::TexCoord(0), uv_accessor);
             } else {
                 eprintln!("No texcoords accessor available.");
+            }
+
+            if let Some(skin_accessor) = ctx.skin_accessor {
+                primitive.set_attribute(gltf::VertexAttribute::Joints(0), skin_accessor);
+            }
+
+            if let Some(skin_weight_accessor) = ctx.skin_weight_accessor {
+                primitive.set_attribute(gltf::VertexAttribute::Weights(0), skin_weight_accessor);
             }
 
             primitives.push(primitive);
