@@ -47,6 +47,7 @@ pub struct NdGltfContext {
     pub(crate) uv_accessor: Option<GltfIndex>,
     pub(crate) skin_accessor: Option<GltfIndex>,
     pub(crate) skin_weight_accessor: Option<GltfIndex>,
+    pub(crate) normal_accessor: Option<GltfIndex>,
 
     pub(crate) current_skin: Option<GltfIndex>,
 

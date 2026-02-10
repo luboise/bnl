@@ -97,6 +97,8 @@ impl NdNode for NdVertexBuffer {
                             ctx.skin_accessor = Some(accessor_index)
                         } else if res_view.res_type() == VertexBufferViewType::SkinWeight {
                             ctx.skin_weight_accessor = Some(accessor_index)
+                        } else if res_view.res_type() == VertexBufferViewType::Normal {
+                            ctx.normal_accessor = Some(accessor_index)
                         }
                     }
                     Err(e) => {
@@ -119,7 +121,7 @@ pub enum VertexBufferViewType {
     Skin = 0x0,
     SkinWeight = 0x8,
     Vertex = 0x9,
-    Unknown10 = 0xa,
+    Normal = 0xa,
     Unknown11 = 0xb,
     UV = 0xd,
     Unknown14 = 0xe,
@@ -134,7 +136,7 @@ impl From<u8> for VertexBufferViewType {
             0 => Self::Skin,
             0x8 => Self::SkinWeight,
             0x9 => Self::Vertex,
-            0xa => Self::Unknown10,
+            0xa => Self::Normal,
             0xb => Self::Unknown11,
             0xd => Self::UV,
             0xe => Self::Unknown14,
@@ -294,8 +296,21 @@ impl VertexBufferResourceView {
                 println!("Skin weights accessor at index {accessor_index}");
                 Ok(accessor_index)
             }
-            VertexBufferViewType::Unknown10
-            | VertexBufferViewType::Unknown11
+            VertexBufferViewType::Normal => {
+                let num_vertices = self.view_size / 12;
+
+                let accessor_index = gltf.add_accessor(gltf::Accessor::new(
+                    buffer_view_index,
+                    0,
+                    gltf::AccessorDataType::F32,
+                    num_vertices as usize,
+                    gltf::AccessorComponentCount::VEC3,
+                ));
+
+                println!("Vertices accessor at index {accessor_index}");
+                Ok(accessor_index)
+            }
+            VertexBufferViewType::Unknown11
             | VertexBufferViewType::Unknown14
             | VertexBufferViewType::Unknown15
             | VertexBufferViewType::Unknown16

@@ -111,6 +111,12 @@ impl NdNode for NdPushBuffer {
                 primitive.set_attribute(gltf::VertexAttribute::Weights(0), skin_weight_accessor);
             }
 
+            if let Some(normal_accessor) = ctx.normal_accessor {
+                primitive.set_attribute(gltf::VertexAttribute::Normal, normal_accessor);
+            } else {
+                eprintln!("No normals accessor available.");
+            }
+
             primitives.push(primitive);
         });
 
