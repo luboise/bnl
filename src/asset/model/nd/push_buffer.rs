@@ -103,13 +103,13 @@ impl NdNode for NdPushBuffer {
                 eprintln!("No texcoords accessor available.");
             }
 
-            if let Some(skin_accessor) = ctx.skin_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::Joints(0), skin_accessor);
-            }
-
-            if let Some(skin_weight_accessor) = ctx.skin_weight_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::Weights(0), skin_weight_accessor);
-            }
+            // if let Some(skin_accessor) = ctx.skin_accessor {
+            //     primitive.set_attribute(gltf::VertexAttribute::Joints(0), skin_accessor);
+            // }
+            //
+            // if let Some(skin_weight_accessor) = ctx.skin_weight_accessor {
+            //     primitive.set_attribute(gltf::VertexAttribute::Weights(0), skin_weight_accessor);
+            // }
 
             if let Some(normal_accessor) = ctx.normal_accessor {
                 primitive.set_attribute(gltf::VertexAttribute::Normal, normal_accessor);

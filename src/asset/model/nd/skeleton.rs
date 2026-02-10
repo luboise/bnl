@@ -2,6 +2,7 @@ use super::prelude::*;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Bone {
+    pub name: Option<String>,
     pub parent_id: u16,
     pub id: u16,
     pub local_transform: [f32; 3],
@@ -37,9 +38,7 @@ impl NdNode for NdSkeleton {
             .gltf
             .add_node(gltf::Node::new(Some("ndSkeleton".to_string())));
 
-        let root_index = ctx
-            .gltf
-            .add_node(gltf::Node::new(Some("Armature".to_string())));
+        let root_index = ctx.gltf.add_node(gltf::Node::new(Some("BASE".to_string())));
 
         let mut new_skin = gltf::Skin::default();
         new_skin.joints.push(root_index);
@@ -58,7 +57,9 @@ impl NdNode for NdSkeleton {
                 return Err(AssetParseError::ErrorParsingDescriptor);
             }
 
-            let mut bone_node = gltf::Node::new(Some(format!("bone_{i}")));
+            let mut bone_node = gltf::Node::new(Some(
+                bone.name.clone().unwrap_or(format!("unnamed_joint_{i}")),
+            ));
             bone_node.set_transform(Some(gltf::NodeTransform::TRS(
                 bone.local_transform,
                 [0f32, 0f32, 0f32],

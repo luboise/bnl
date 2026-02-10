@@ -1,7 +1,7 @@
 use std::io::{Cursor, Read};
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use gltf_writer::gltf::NodeTransform;
+use gltf_writer::gltf::{self, NodeTransform, Quaternion};
 
 use crate::{
     VirtualResource,
@@ -115,9 +115,9 @@ impl From<PrecisionSpecifiers> for u32 {
         (value.unknown_u8 as u32)
             | ((value.scale_divisor as u32) << 8)
             | ((value.unknown_u5 as u32) << (8 + 5))
-            | ((value.pos_divisor as u32) >> (8 + 5 + 5))
-            | ((value.quat_divisor as u32) >> (8 + 5 + 5 + 5))
-            | ((value.unknown_u4 as u32) >> (8 + 5 + 5 + 5 + 5))
+            | ((value.pos_divisor as u32) << (8 + 5 + 5))
+            | ((value.quat_divisor as u32) << (8 + 5 + 5 + 5))
+            | ((value.unknown_u4 as u32) << (8 + 5 + 5 + 5 + 5))
     }
 }
 
@@ -182,7 +182,7 @@ pub struct AnimDescriptor {
     // 0x10
     some_ptr_1: u32,
     // 0x14
-    transforms_per_keyframe: u16,
+    num_bones: u16,
     unused_1: u16,
     // 0x18
     num_keyframes: u16,
@@ -249,7 +249,7 @@ impl AnimDescriptor {
     }
 
     pub fn transforms_per_keyframe(&self) -> u16 {
-        self.transforms_per_keyframe
+        self.num_bones
     }
 
     pub fn num_keyframes(&self) -> u16 {
@@ -265,7 +265,7 @@ impl std::fmt::Debug for AnimDescriptor {
             .field("duration", &self.duration)
             .field("c_vals_ptr", &self.c_vals_ptr)
             .field("some_ptr_1", &self.some_ptr_1)
-            .field("transforms_per_keyframe", &self.transforms_per_keyframe)
+            .field("transforms_per_keyframe", &self.num_bones)
             .field("unused_1", &self.unused_1)
             .field("num_keyframes", &self.num_keyframes)
             .field("unused_2", &self.unused_2)
@@ -345,7 +345,7 @@ impl AnimKeyframe {
             return Err(AssetParseError::ErrorParsingDescriptor);
         }
 
-        if descriptor.transforms_per_keyframe as usize != descriptor.pack_formats.len() {
+        if descriptor.num_bones as usize != descriptor.pack_formats.len() {
             return Err(AssetParseError::InvalidDataViews(
                 "Number of transforms per keyframe does not match the number of pack formats."
                     .to_string(),
@@ -374,21 +374,21 @@ impl AnimKeyframe {
         let mut zipped = descriptor.shorts.iter().zip(transform_deltas);
 
         // Reconstruct the transforms using the delta offsets
-        for i in 0..descriptor.transforms_per_keyframe as usize {
+        for i in 0..descriptor.num_bones as usize {
             let mut transform = PartialTransform::default();
 
             let format = unsafe { descriptor.pack_formats.get_unchecked(i) };
 
             let mut get_transform_val = |scale: f32| -> Result<f32, AssetParseError> {
-                let (short, delta) = zipped
-                .next()
-                .ok_or_else(|| {
-                    AssetParseError::InvalidDataViews(format!(
-                        "Not enough transform values or shorts available in keyframe ({} shorts available, {} values available)",
-                        descriptor.shorts.len(),
-                        descriptor.bits_per_channel.len(),
-                    ))
-                })?;
+                let Some((short, delta)) = zipped.next() else {
+                    // TODO: Figure out why these 2 are different
+                    return Ok(0.0);
+                    // return Err(AssetParseError::InvalidDataViews(format!(
+                    //     "Not enough transform values or shorts available in keyframe ({} shorts available, {} channels have bit counts)",
+                    //     descriptor.shorts.len(),
+                    //     descriptor.bits_per_channel.len(),
+                    // )));
+                };
 
                 Ok((i32::from(*short) + delta) as f32 * scale)
             };
@@ -535,15 +535,17 @@ impl Anim {
                         bone_anim_channels[i].translation = Some(vec![]);
                     }
 
-                    // if transform.qx.is_some() || transform.qy.is_some() || transform.qz.is_some() {
-                    //     bone_anim_channels[i].rotation = Some(vec![]);
-                    // }
+                    if transform.qx.is_some() || transform.qy.is_some() || transform.qz.is_some() {
+                        bone_anim_channels[i].rotation = Some(vec![]);
+                    }
 
                     if transform.sx.is_some() || transform.sy.is_some() || transform.sz.is_some() {
                         bone_anim_channels[i].scale = Some(vec![]);
                     }
                 })
         }
+
+        let mut prev_quat: Option<Quaternion> = None;
 
         for keyframe in &self.keyframes {
             keyframe
@@ -560,13 +562,31 @@ impl Anim {
                         ]);
                     }
 
-                    // if transform.qx.is_some() || transform.qy.is_some() || transform.qz.is_some() {
-                    //     bone_anim_channels[i].translation.as_mut().unwrap().push([
-                    //         transform.qx.unwrap_or(0.0),
-                    //         transform.qy.unwrap_or(0.0),
-                    //         transform.qz.unwrap_or(0.0),
-                    //     ]);
-                    // }
+                    if transform.qx.is_some() || transform.qy.is_some() || transform.qz.is_some() {
+                        bone_anim_channels[i].rotation.as_mut().unwrap().push({
+                            let (x, y, z) = (
+                                transform.qx.unwrap_or(0.0),
+                                transform.qy.unwrap_or(0.0),
+                                transform.qz.unwrap_or(0.0),
+                            );
+
+                            let w = (1.0 - (x.powf(2.0) + y.powf(2.0) + z.powf(2.0)))
+                                .max(0.0)
+                                .sqrt();
+
+                            let mut q = Quaternion { x, y, z, w };
+
+                            if let Some(q2) = prev_quat.take() {
+                                if q.dot(&q2) < 0.0 {
+                                    q = -q;
+                                }
+                            }
+
+                            prev_quat = Some(q.clone());
+
+                            q.to_array()
+                        });
+                    }
 
                     if transform.sx.is_some() || transform.sy.is_some() || transform.sz.is_some() {
                         bone_anim_channels[i].scale.as_mut().unwrap().push([
@@ -650,7 +670,7 @@ impl AssetDescriptor for AnimDescriptor {
             duration,
             c_vals_ptr,
             some_ptr_1,
-            transforms_per_keyframe,
+            num_bones: transforms_per_keyframe,
             unused_1,
             num_keyframes,
             unused_2,

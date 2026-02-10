@@ -1,7 +1,10 @@
 use byteorder::{LittleEndian, ReadBytesExt};
-use std::io::{self, Cursor, Read, Seek, SeekFrom};
+use std::{
+    collections::HashMap,
+    io::{self, BufRead, Cursor, Read, Seek, SeekFrom},
+};
 
-use crate::asset::model::nd::{ModelSlice, Nd};
+use crate::asset::model::nd::{ModelReadContext, ModelSlice, Nd};
 
 #[derive(Debug)]
 pub enum SubresourceError {
@@ -16,6 +19,7 @@ pub struct Mesh {
     primitives: Vec<Nd>,
 }
 
+/*
 impl Mesh {
     pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Mesh, SubresourceError> {
         let mut cur = Cursor::new(bytes);
@@ -42,11 +46,17 @@ impl Mesh {
 
         let mut primitives = Vec::with_capacity(primitive_ptrs.len());
 
+
+        let mut mrc = ModelReadContext::new(&);
+
         for primitive_ptr in primitive_ptrs {
-            if let Ok(nd) = Nd::new(ModelSlice {
-                slice: bytes,
-                read_start: primitive_ptr as usize,
-            }) {
+            if let Ok(nd) = Nd::new(
+                &mut ModelReadContext::default(),
+                ModelSlice {
+                    slice: bytes,
+                    read_start: primitive_ptr as usize,
+                },
+            ) {
                 primitives.push(nd);
             };
         }
@@ -58,6 +68,7 @@ impl Mesh {
         &self.primitives
     }
 }
+*/
 
 #[repr(C)]
 #[derive(Debug, Clone)]
@@ -72,6 +83,7 @@ pub struct MeshDescriptor {
 
     // DO NOT SERIALISE
     pub(crate) primitives: Vec<Nd>,
+    pub(crate) key_value_map: HashMap<String, Vec<u8>>,
 }
 
 impl From<io::Error> for SubresourceError {
@@ -101,7 +113,7 @@ impl MeshDescriptor {
 
         let mut primitive_cur = cur.clone();
 
-        primitive_cur.seek(SeekFrom::Start(primitive_ptrs_start as u64));
+        primitive_cur.seek(SeekFrom::Start(primitive_ptrs_start as u64))?;
 
         for i in 0..primitive_count as usize {
             primitive_ptrs[i] = primitive_cur.read_u32::<LittleEndian>()?;
@@ -109,11 +121,52 @@ impl MeshDescriptor {
 
         let mut primitives = Vec::with_capacity(primitive_ptrs.len());
 
+        let mut key_value_map = HashMap::<String, Vec<u8>>::default();
+
+        if key_values_ptr != 0 {
+            cur.seek(SeekFrom::Start(key_values_ptr.into()))?;
+
+            let num_values = cur.read_u32::<LittleEndian>()?;
+            let data_start_ptr = cur.read_u32::<LittleEndian>()?;
+            if num_values > 0 && data_start_ptr != 0 {
+                cur.seek(SeekFrom::Start(data_start_ptr.into()))?;
+
+                for i in 0..num_values as usize {
+                    let key_ptr = cur.read_u32::<LittleEndian>()?;
+                    let value_ptr = cur.read_u32::<LittleEndian>()?;
+                    let value_size = cur.read_u32::<LittleEndian>()?;
+
+                    let mut cur = cur.clone();
+
+                    cur.seek(SeekFrom::Start((key_ptr).into()))?;
+
+                    let mut key = vec![];
+                    cur.read_until(0u8, &mut key)?;
+
+                    println!();
+
+                    key.pop();
+
+                    let mut value = vec![0u8; value_size as usize];
+                    cur.seek(SeekFrom::Start((value_ptr).into()))?;
+                    cur.read_exact(&mut value)?;
+
+                    let key = key.into_iter().map(|c| c as char).collect();
+                    key_value_map.insert(key, value);
+                }
+            }
+        }
+
+        let mut mrc = ModelReadContext::new(&key_value_map);
+
         for primitive_ptr in primitive_ptrs {
-            match Nd::new(ModelSlice {
-                slice: bytes,
-                read_start: primitive_ptr as usize,
-            }) {
+            match Nd::new(
+                &mut mrc,
+                ModelSlice {
+                    slice: bytes,
+                    read_start: primitive_ptr as usize,
+                },
+            ) {
                 Ok(nd) => primitives.push(nd),
                 Err(_) => {
                     return Err(SubresourceError::CreationError);
@@ -130,6 +183,7 @@ impl MeshDescriptor {
             unknown3,
             floats,
             primitives,
+            key_value_map,
         })
     }
 

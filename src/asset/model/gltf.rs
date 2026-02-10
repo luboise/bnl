@@ -1,4 +1,7 @@
-use std::path::{self, Path};
+use std::{
+    collections::HashMap,
+    path::{self, Path},
+};
 
 use gltf_writer::gltf::{self, Gltf, GltfIndex, serialisation::GltfExportType};
 
@@ -14,6 +17,7 @@ use crate::{
 #[derive(Debug)]
 pub struct GLTFModel {
     descriptor: ModelDescriptor,
+
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
     gltf: Gltf,
 }
@@ -42,6 +46,8 @@ impl Dump for GLTFModel {
 
 #[derive(Debug, Clone, Default)]
 pub struct NdGltfContext {
+    pub(crate) key_value_map: HashMap<String, Vec<u8>>,
+
     pub(crate) gltf: Gltf,
     pub(crate) positions_accessor: Option<GltfIndex>,
     pub(crate) uv_accessor: Option<GltfIndex>,
@@ -151,6 +157,7 @@ impl AssetLike for GLTFModel {
 
         let mut ctx = NdGltfContext {
             gltf,
+            key_value_map: descriptor.key_value_map().cloned().unwrap_or_default(),
             ..Default::default()
         };
 

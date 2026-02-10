@@ -27,6 +27,7 @@ pub(crate) mod prelude {
 }
 
 use std::{
+    collections::HashMap,
     fmt::Display,
     io::{self},
     iter::{self},
@@ -169,7 +170,11 @@ impl Serialize for NdHeader {
 }
 
 impl NdHeader {
-    pub fn from_bytes(bytes: &[u8], header_start: u32) -> Result<NdHeader, NdError> {
+    pub fn from_bytes(
+        ctx: &mut ModelReadContext,
+        bytes: &[u8],
+        header_start: u32,
+    ) -> Result<NdHeader, NdError> {
         let mut cur = Cursor::new(bytes);
 
         cur.seek(SeekFrom::Start(header_start as u64))?;
@@ -211,10 +216,13 @@ impl NdHeader {
         let first_child = match first_child_ptr {
             0 => None,
             _ => Some(
-                Nd::new(ModelSlice {
-                    slice: bytes,
-                    read_start: first_child_ptr as usize,
-                })?
+                Nd::new(
+                    ctx,
+                    ModelSlice {
+                        slice: bytes,
+                        read_start: first_child_ptr as usize,
+                    },
+                )?
                 .into(),
             ),
         };
@@ -222,10 +230,13 @@ impl NdHeader {
         let next_sibling = match next_sibling_ptr {
             0 => None,
             _ => Some(
-                Nd::new(ModelSlice {
-                    slice: bytes,
-                    read_start: next_sibling_ptr as usize,
-                })?
+                Nd::new(
+                    ctx,
+                    ModelSlice {
+                        slice: bytes,
+                        read_start: next_sibling_ptr as usize,
+                    },
+                )?
                 .into(),
             ),
         };
@@ -398,6 +409,29 @@ impl Serialize for Nd {
 }
 */
 
+pub struct ModelReadContext<'a> {
+    key_value_map: &'a HashMap<String, Vec<u8>>,
+}
+
+impl<'a> ModelReadContext<'a> {
+    pub fn new(key_value_map: &'a HashMap<String, Vec<u8>>) -> Self {
+        Self { key_value_map }
+    }
+
+    pub fn get_bone_name(&self, bone_index: u32) -> Option<&str> {
+        self.key_value_map.iter().find_map(|(k, v)| {
+            (is_bone_name(k)
+                && v.len() == 4
+                && u32::from_le_bytes(v.as_slice().try_into().unwrap()) == bone_index)
+                .then_some(k.as_str())
+        })
+    }
+}
+
+pub fn is_bone_name<S: AsRef<str>>(s: S) -> bool {
+    ["BASE", "MID", "joint3"].contains(&s.as_ref())
+}
+
 pub struct ModelSlice<'a> {
     pub(crate) slice: &'a [u8],
     pub(crate) read_start: usize,
@@ -428,12 +462,12 @@ impl<'a> ModelSlice<'a> {
 }
 
 impl Nd {
-    pub fn new(model_slice: ModelSlice) -> Result<Nd, NdError> {
+    pub fn new(ctx: &mut ModelReadContext, model_slice: ModelSlice) -> Result<Nd, NdError> {
         let slice = model_slice.slice();
 
         let mut cur = Cursor::new(slice);
 
-        let header = NdHeader::from_bytes(slice, model_slice.read_start as u32)?;
+        let header = NdHeader::from_bytes(ctx, slice, model_slice.read_start as u32)?;
 
         cur.seek(SeekFrom::Start(32 + model_slice.read_start as u64))?;
 
@@ -581,8 +615,9 @@ impl Nd {
 
                         cur.seek(SeekFrom::Start(bones_ptr as u64))?;
 
-                        for _ in 0..(num_bones as usize) {
+                        for i in 0..(num_bones as u32) {
                             bones.push(Bone {
+                                name: ctx.get_bone_name(i).map(|v| v.into()),
                                 parent_id: cur.read_u16::<LittleEndian>()?,
                                 id: cur.read_u16::<LittleEndian>()?,
                                 local_transform: [
@@ -666,17 +701,25 @@ mod tests {
     #[test]
     fn nd_header() {
         let bytes = get_test_bytes();
-        NdHeader::from_bytes(&bytes, 0x34).expect("Unable to create NdHeader");
+        NdHeader::from_bytes(
+            &mut ModelReadContext::new(&Default::default()),
+            &bytes,
+            0x34,
+        )
+        .expect("Unable to create NdHeader");
     }
 
     #[test]
     fn nd_parse_test() {
         let bytes = get_test_bytes();
 
-        Nd::new(ModelSlice {
-            slice: &bytes,
-            read_start: 0x34,
-        })
+        Nd::new(
+            &mut ModelReadContext::new(&Default::default()),
+            ModelSlice {
+                slice: &bytes,
+                read_start: 0x34,
+            },
+        )
         .expect("Unable to create ND");
     }
 
@@ -684,10 +727,13 @@ mod tests {
     fn nd_shader_param2() {
         let bytes = get_test_file("test_ndShaderParam2_1");
 
-        let nd = Nd::new(ModelSlice {
-            slice: &bytes,
-            read_start: 0,
-        })
+        let nd = Nd::new(
+            &mut ModelReadContext::new(&Default::default()),
+            ModelSlice {
+                slice: &bytes,
+                read_start: 0,
+            },
+        )
         .expect("Unable to create ND");
 
         if let Nd::ShaderParam2(sp2) = nd {

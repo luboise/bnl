@@ -236,7 +236,7 @@ impl VertexBufferResourceView {
                                 } else if val == 27 {
                                     2
                                 } else {
-                                    val
+                                    0
                                 };
                             });
 

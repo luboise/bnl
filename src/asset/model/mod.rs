@@ -2,7 +2,7 @@ pub mod gltf;
 pub mod nd;
 pub mod sub_main;
 
-use std::io::{Cursor, Seek, SeekFrom};
+use std::{collections::HashMap, io::{Cursor, Seek, SeekFrom}};
 
 use byteorder::{LittleEndian, ReadBytesExt};
 
@@ -64,7 +64,6 @@ pub struct ModelDescriptor {
     subresource_count: u32,
     raw_subresources: Vec<RawModelSubresource>,
     texture_descriptors: Vec<TextureDescriptor>,
-
     mesh_descriptors: Vec<MeshDescriptor>,
 }
 
@@ -72,6 +71,13 @@ impl ModelDescriptor {
     pub fn mesh_descriptors(&self) -> &[MeshDescriptor] {
         &self.mesh_descriptors
     }
+
+    pub fn key_value_map(&self) -> Option<&HashMap<String, Vec<u8>>> {
+        self.mesh_descriptors.iter().find_map(|mesh|{
+            (!mesh.key_value_map.is_empty()).then_some(&mesh.key_value_map)
+        })
+    }
+
 }
 
 impl AssetDescriptor for ModelDescriptor {
