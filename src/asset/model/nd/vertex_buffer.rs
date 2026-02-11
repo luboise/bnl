@@ -229,15 +229,25 @@ impl VertexBufferResourceView {
                             .take(4)
                             .enumerate()
                             .for_each(|(i, c)| {
-                                // TODO: Remove this and actually figure out bone mapping
-                                let val = f32::from_le_bytes(c.try_into().unwrap()) as u16;
-                                skin_indices[i] = if val == 24 {
-                                    1
-                                } else if val == 27 {
-                                    2
-                                } else {
-                                    0
-                                };
+                                let bone_register =
+                                    f32::from_le_bytes(c.try_into().unwrap()) as u16;
+
+                                // Skip unused bone slots
+                                if bone_register == 0 {
+                                    return;
+                                }
+
+                                if bone_register % 3 != 0 {
+                                    eprintln!(
+                                        "Register {} is not a valid bone register (r % 3 == 0)",
+                                        bone_register
+                                    );
+                                }
+
+                                // 24 is the base register for bone affines
+                                // Each bone affine is 3 registers long, since one vertex
+                                // shader register is 4 floats and an affine is 12 floats
+                                skin_indices[i] = (bone_register - 24) / 3;
                             });
 
                         skin_indices
