@@ -3,9 +3,9 @@ use crate::d3d::D3DPrimitiveType;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DrawCall {
-    pub(crate) data_ptr: u32,
-    pub(crate) prim_type: D3DPrimitiveType,
-    pub(crate) num_vertices: u32,
+    pub data_ptr: u32,
+    pub prim_type: D3DPrimitiveType,
+    pub num_vertices: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -28,13 +28,20 @@ pub struct NdPushBuffer {
     #[serde(skip_serializing)]
     pub(crate) buffer_bytes: Vec<u8>,
 
-    pub(crate) push_buffer_base: u32,
+    pub push_buffer_base: u32,
     pub(crate) push_buffer_size: u32,
 
     pub(crate) draw_calls: Vec<DrawCall>,
 }
 
 impl NdPushBuffer {
+    pub fn indices(&self) -> Vec<u16> {
+        self.buffer_bytes
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes(c[0..2].try_into().unwrap()))
+            .collect()
+    }
+
     pub fn draw_calls(&self) -> &[DrawCall] {
         &self.draw_calls
     }

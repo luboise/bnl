@@ -12,7 +12,7 @@ use crate::{
     VirtualResource,
     asset::{
          AssetDescriptor, AssetLike, AssetParseError, AssetType,
-        model::sub_main::{Mesh, MeshDescriptor},
+        model::sub_main::{ MeshDescriptor},
         texture::{Texture, TextureDescriptor},
     },
 };
@@ -21,8 +21,9 @@ use crate::{
 pub struct Model {
     descriptor: ModelDescriptor,
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
-    meshes: Vec<Mesh>,
+    // meshes: Vec<Mesh>,
     textures: Vec<Texture>,
+    resource: Vec<u8>
 }
 
 #[repr(u32)]
@@ -209,7 +210,7 @@ impl AssetLike for Model {
         let mut model = Model {
             descriptor: descriptor.clone(),
             textures: vec![],
-            meshes: vec![],
+            resource: virtual_res.get_all_bytes()
         };
 
         for subtex_desc in &model.descriptor.texture_descriptors {
@@ -237,8 +238,7 @@ impl AssetLike for Model {
     }
 
     fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
-        // TODO: Implement this
-        todo!()
+        Some(vec![self.resource.clone()])
     }
 }
 

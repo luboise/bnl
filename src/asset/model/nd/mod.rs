@@ -3,7 +3,7 @@ mod shader;
 mod skeleton;
 mod vertex_buffer;
 
-pub use push_buffer::{NdBGPushBuffer, NdPushBuffer};
+pub use push_buffer::{DrawCall, NdBGPushBuffer, NdPushBuffer};
 pub use shader::{NdShader2, NdShaderParam2};
 pub use skeleton::NdSkeleton;
 pub use vertex_buffer::*;
@@ -36,7 +36,7 @@ use std::{
 use serde::{Serialize, ser::SerializeMap};
 
 use crate::asset::{
-    model::nd::{push_buffer::DrawCall, shader::NdShaderParam2Payload, skeleton::Bone},
+    model::nd::{shader::NdShaderParam2Payload, skeleton::Bone},
     param::KnownUnknown,
 };
 
@@ -398,6 +398,50 @@ impl NdNode for Nd {
     }
 }
 
+impl<'a> Iterator for NdIterator<'a> {
+    type Item = &'a Nd;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.current_nd?;
+
+        // If sibling
+        if let Some(x) = self.current_nd.unwrap().header().next_sibling.as_deref() {
+            self.current_nd = Some(x);
+            return Some(x);
+        }
+
+        // If child
+        if let Some(child) = self.base_nd.header().first_child() {
+            self.current_nd = Some(child);
+            self.base_nd = child;
+
+            return Some(child);
+        }
+
+        unreachable!()
+    }
+}
+
+impl Nd {
+    pub fn heirarchy(&self) -> impl Iterator<Item = &Nd> {
+        NdIterator::new(self)
+    }
+}
+
+struct NdIterator<'a> {
+    base_nd: &'a Nd,
+    current_nd: Option<&'a Nd>,
+}
+
+impl<'a> NdIterator<'a> {
+    pub fn new(nd: &'a Nd) -> Self {
+        Self {
+            base_nd: nd,
+            current_nd: Some(nd),
+        }
+    }
+}
+
 /*
 impl Serialize for Nd {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
@@ -480,7 +524,8 @@ impl Nd {
                     let mut resource_views = Vec::with_capacity(num_resource_views as usize);
 
                     for _ in 0..num_resource_views {
-                        resource_views.push(VertexBufferResourceView::from_cursor(&mut cur)?);
+                        resource_views
+                            .push(res_view::VertexBufferResourceView::from_cursor(&mut cur)?);
                     }
 
                     Ok(Nd::VertexBuffer(NdVertexBuffer {

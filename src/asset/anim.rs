@@ -1,7 +1,7 @@
 use std::io::{Cursor, Read};
 
 use byteorder::{LittleEndian, ReadBytesExt};
-use gltf_writer::gltf::{self, NodeTransform, Quaternion};
+use gltf_writer::gltf::{NodeTransform, Quaternion};
 
 use crate::{
     VirtualResource,
