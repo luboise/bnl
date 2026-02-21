@@ -93,10 +93,19 @@ pub enum TextureError {
     UnsupportedOutputType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Texture {
     descriptor: TextureDescriptor,
     bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for Texture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Texture")
+            .field("descriptor", &self.descriptor)
+            .field("bytes", &format!("{} bytes", self.bytes.len()))
+            .finish()
+    }
 }
 
 impl Texture {

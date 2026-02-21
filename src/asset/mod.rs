@@ -19,6 +19,7 @@ pub mod param;
 pub mod aidlist;
 pub mod anim;
 pub mod cuelist;
+pub mod font;
 pub mod loctext;
 pub mod model;
 pub mod script;

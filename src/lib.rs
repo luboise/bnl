@@ -21,7 +21,7 @@ pub mod modding;
 pub mod xsb;
 
 #[derive(Debug)]
-pub(crate) struct VirtualResource<'a> {
+pub struct VirtualResource<'a> {
     slices: Vec<&'a [u8]>,
 }
 
@@ -130,7 +130,7 @@ where {
         bytes
     }
 
-    pub(crate) fn from_slices<'a>(slices: &'a [&[u8]]) -> VirtualResource<'a> {
+    pub fn from_slices<'a>(slices: &'a [&[u8]]) -> VirtualResource<'a> {
         VirtualResource {
             slices: slices.to_vec(),
         }
