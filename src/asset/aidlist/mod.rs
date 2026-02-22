@@ -25,6 +25,9 @@ pub struct AidList {
 }
 
 impl AidList {
+    pub fn asset_ids(&self) -> &Vec<String> {
+        &self.asset_ids
+    }
     pub fn asset_ids_mut(&mut self) -> &mut Vec<String> {
         &mut self.asset_ids
     }

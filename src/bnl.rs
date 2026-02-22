@@ -855,6 +855,19 @@ impl From<miniz_oxide::inflate::DecompressError> for BNLError {
     }
 }
 
+impl std::fmt::Display for BNLError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                BNLError::DecompressionFailure => "Decompression failure".to_owned(),
+                BNLError::DataReadError(e) => format!("Data read error: {e}"),
+            }
+        )
+    }
+}
+
 pub fn get_asset_names_list<P: AsRef<Path>>(path: P) -> Result<Vec<String>, BNLError> {
     let file = File::open(path.as_ref())?;
 
