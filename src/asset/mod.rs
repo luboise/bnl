@@ -19,6 +19,7 @@ pub mod param;
 pub mod aidlist;
 pub mod anim;
 pub mod cuelist;
+pub mod cutscene;
 pub mod font;
 pub mod loctext;
 pub mod model;
@@ -243,12 +244,6 @@ pub enum AssetParseError {
     FileNotFound(String),
 }
 
-impl Display for AssetParseError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
 impl From<std::io::Error> for AssetParseError {
     fn from(e: std::io::Error) -> Self {
         AssetParseError::InvalidDataViews(
@@ -260,6 +255,22 @@ impl From<std::io::Error> for AssetParseError {
 impl From<SubresourceError> for AssetParseError {
     fn from(_: SubresourceError) -> Self {
         Self::ErrorParsingDescriptor
+    }
+}
+
+impl fmt::Display for AssetParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::ParserNotImplemented => "Parser not implemented".to_string(),
+                Self::ErrorParsingDescriptor => "Error parsing descriptor".to_string(),
+                Self::InputTooSmall => "Input too small".to_string(),
+                Self::InvalidDataViews(e) => format!("Invalid data views: {e}"),
+                Self::FileNotFound(e) => format!("File not found: {e}"),
+            }
+        )
     }
 }
 
@@ -276,12 +287,11 @@ pub enum AssetError {
 impl fmt::Display for AssetError {
     // This trait requires `fmt` with this exact signature.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // Write strictly the first element into the supplied output
-        // stream: `f`. Returns `fmt::Result` which indicates whether the
-        // operation succeeded or failed. Note that `write!` uses syntax which
-        // is very similar to `println!`.
-        write!(f, "Asset error")?;
-        Ok(())
+        match self {
+            AssetError::ParseError(asset_parse_error) => write!(f, "{asset_parse_error}"),
+            AssetError::TypeMismatch => write!(f, "Type mismatch"),
+            AssetError::NotFound => write!(f, "Not found"),
+        }
     }
 }
 

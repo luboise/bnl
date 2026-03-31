@@ -942,6 +942,57 @@ pub fn get_asset_names_list<P: AsRef<Path>>(path: P) -> Result<Vec<String>, BNLE
         .collect()
 }
 
+pub fn get_aid_list(compressed_bnl: &[u8]) -> Result<Vec<String>, BNLError> {
+    if compressed_bnl.len() < 40 {
+        return Err(BNLError::DataReadError(format!(
+            "Length of BNL file must be at least 40 bytes (received {})",
+            compressed_bnl.len()
+        )));
+    }
+
+    let mut cur = Cursor::new(compressed_bnl);
+
+    let mut header = BNLHeader {
+        file_count: cur.read_u16::<LittleEndian>()?,
+        flags: cur.read_u8()?,
+        ..Default::default()
+    };
+
+    cur.read_exact(&mut header.unknown_2)?;
+
+    header.asset_desc_loc = DataView::from_reader(&mut cur)?;
+    header.buffer_views_loc = DataView::from_reader(&mut cur)?;
+    header.buffer_loc = DataView::from_reader(&mut cur)?;
+    header.descriptor_loc = DataView::from_reader(&mut cur)?;
+
+    let asset_descriptions = match miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(
+        &compressed_bnl[40..],
+        header.asset_desc_loc.size as usize,
+    ) {
+        Ok(v) => v,
+        Err(miniz_oxide::inflate::DecompressError { status, output }) => match status {
+            TINFLStatus::HasMoreOutput => output,
+            _ => return Err(BNLError::DecompressionFailure),
+        },
+    };
+
+    Ok(asset_descriptions
+        .chunks_exact(size_of::<AssetDescription>())
+        .filter_map(|chunk| {
+            let mut string_bytes = vec![];
+
+            chunk
+                .take(size_of::<AssetName>() as u64)
+                .read_until(0x00, &mut string_bytes)
+                .ok()?;
+
+            string_bytes.pop();
+
+            String::from_utf8(string_bytes).ok()
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

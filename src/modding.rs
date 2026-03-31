@@ -1,7 +1,7 @@
 use std::{collections::HashMap, fs, io, path::Path};
 
 use crate::{
-    BNLFile, RawAsset,
+    BNLFile,
     asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType, Parse, aidlist::AidList},
 };
 use regex::Regex;
@@ -14,7 +14,8 @@ pub struct ModSpecification {
 }
 
 #[derive(Debug)]
-pub struct AssetOverride {
+pub struct RawAssetOverride {
+    pub asset_type: AssetType,
     pub descriptor_bytes: Vec<u8>,
     pub resource_bytes: Vec<u8>,
 }
@@ -25,11 +26,32 @@ pub enum ModErrorType {
     AssetOverrideError,
 }
 
+impl std::fmt::Display for ModErrorType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Self::SpecificationError => "SpecificationError",
+                Self::AssetOverrideError => "AssetOverrideError",
+            }
+        )
+    }
+}
+
 #[derive(Debug)]
 pub struct ModError {
     error_type: ModErrorType,
     details: String,
 }
+
+impl std::fmt::Display for ModError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.error_type, self.details)
+    }
+}
+
+impl std::error::Error for ModError {}
 
 impl From<io::Error> for ModError {
     fn from(value: io::Error) -> Self {
@@ -49,10 +71,16 @@ impl From<AssetParseError> for ModError {
     }
 }
 
+pub trait ModLike {
+    type Descriptor: AssetDescriptor;
+    fn apply(&self, descriptor: &mut Self::Descriptor) -> Result<(), Box<dyn std::error::Error>>;
+}
+
 #[derive(Debug)]
 pub struct Mod {
     spec: ModSpecification,
-    overrides: HashMap<String, AssetOverride>,
+    raw_overrides: HashMap<String, RawAssetOverride>,
+    cutscene_mods: HashMap<String, crate::asset::cutscene::CutsceneMod>,
 }
 
 impl Mod {
@@ -62,7 +90,8 @@ impl Mod {
                 version: 0,
                 name: name.as_ref().to_string(),
             },
-            overrides: Default::default(),
+            raw_overrides: Default::default(),
+            cutscene_mods: HashMap::new(),
         }
     }
 
@@ -99,9 +128,10 @@ impl Mod {
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, io::Error>>()?;
 
-        let re = Regex::new(r"^aid_([a-z0-9]+)_([a-z0-9]+)_([a-z0-9]+)_([a-z0-9]+)$").unwrap();
+        let re = Regex::new(r"^aid_([a-z0-9]+)_([a-z0-9]+)_([a-z0-9]+)_([a-z0-9_]+)$").unwrap();
 
-        let mut overrides = HashMap::<String, AssetOverride>::new();
+        let mut raw_overrides = HashMap::<String, RawAssetOverride>::new();
+        let mut cutscene_mods = HashMap::new();
 
         for override_dir in override_dirs {
             if !override_dir.is_dir() {
@@ -122,7 +152,7 @@ impl Mod {
 
             // eg. aid_aidlist_ghoulies_sceneorder_game
 
-            let Some((_, [raw_asset_type, asset_category, asset_group, asset_entry])) =
+            let Some((_, [raw_asset_type, _asset_category, _asset_group, _asset_entry])) =
                 re.captures(override_aid).map(|caps| caps.extract())
             else {
                 return Err(ModError {
@@ -141,100 +171,155 @@ impl Mod {
                 ),
             })?;
 
-            match asset_type {
+            let asset_override: Option<(String, RawAssetOverride)> = match asset_type {
                 AssetType::ResAidList => {
                     let aid_list = AidList::parse(override_dir.join("override.txt"))?;
-                    if let Some(bruh) = overrides.insert(
+                    Some((
                         override_aid.to_string(),
-                        AssetOverride {
+                        RawAssetOverride {
+                            asset_type: AssetType::ResAidList,
                             descriptor_bytes: aid_list.get_descriptor().to_bytes()?,
                             resource_bytes: vec![],
                         },
-                    ) {
-                        return Err(ModError {
-                            error_type: ModErrorType::AssetOverrideError,
-                            details: format!("Asset {override_aid} has already been overwritten."),
-                        });
-                    }
+                    ))
                 }
-                _ => (), //
-                         /*
-                         AssetType::ResTexture => todo!(),
-                         AssetType::ResAnim => todo!(),
-                         AssetType::ResUnknown3 => todo!(),
-                         AssetType::ResModel => todo!(),
-                         AssetType::ResAnimEvents => todo!(),
-                         AssetType::ResCutscene => todo!(),
-                         AssetType::ResCutsceneEvents => todo!(),
-                         AssetType::ResMisc => todo!(),
-                         AssetType::ResActorGoals => todo!(),
-                         AssetType::ResMarker => todo!(),
-                         AssetType::ResFxCallout => todo!(),
-                         AssetType::ResLoctext => todo!(),
-                         AssetType::ResXSoundbank => todo!(),
-                         AssetType::ResXDSP => todo!(),
-                         AssetType::ResXCueList => todo!(),
-                         AssetType::ResFont => todo!(),
-                         AssetType::ResGhoulybox => todo!(),
-                         AssetType::ResGhoulyspawn => todo!(),
-                         AssetType::ResScript => todo!(),
-                         AssetType::ResActorAttribs => todo!(),
-                         AssetType::ResEmitter => todo!(),
-                         AssetType::ResParticle => todo!(),
-                         AssetType::ResRumble => todo!(),
-                         AssetType::ResShakeCam => todo!(),
-                         AssetType::ResCount => todo!(),
-                         */
+                AssetType::ResCutscene => {
+                    if let Some(cutscene_mod) =
+                        std::fs::File::open(override_dir.join("override.json"))
+                            .ok()
+                            .and_then(|v| serde_json::from_reader(v).ok())
+                    {
+                        cutscene_mods.insert(override_aid.to_string(), cutscene_mod);
+                    }
+
+                    None
+                }
+                _ => None, //
+                           /*
+                           AssetType::ResTexture => todo!(),
+                           AssetType::ResAnim => todo!(),
+                           AssetType::ResUnknown3 => todo!(),
+                           AssetType::ResModel => todo!(),
+                           AssetType::ResAnimEvents => todo!(),
+                           AssetType::ResCutscene => todo!(),
+                           AssetType::ResCutsceneEvents => todo!(),
+                           AssetType::ResMisc => todo!(),
+                           AssetType::ResActorGoals => todo!(),
+                           AssetType::ResMarker => todo!(),
+                           AssetType::ResFxCallout => todo!(),
+                           AssetType::ResLoctext => todo!(),
+                           AssetType::ResXSoundbank => todo!(),
+                           AssetType::ResXDSP => todo!(),
+                           AssetType::ResXCueList => todo!(),
+                           AssetType::ResFont => todo!(),
+                           AssetType::ResGhoulybox => todo!(),
+                           AssetType::ResGhoulyspawn => todo!(),
+                           AssetType::ResScript => todo!(),
+                           AssetType::ResActorAttribs => todo!(),
+                           AssetType::ResEmitter => todo!(),
+                           AssetType::ResParticle => todo!(),
+                           AssetType::ResRumble => todo!(),
+                           AssetType::ResShakeCam => todo!(),
+                           AssetType::ResCount => todo!(),
+                           */
+            };
+
+            if let Some((name, asset_override)) = asset_override
+                && let Some(_existing) = raw_overrides.insert(name, asset_override)
+            {
+                return Err(ModError {
+                    error_type: ModErrorType::AssetOverrideError,
+                    details: format!("Asset {override_aid} has already been overwritten."),
+                });
             }
         }
 
         let spec: ModSpecification =
             serde_json::from_slice(&fs::read(mod_root_file)?).expect("Failed to deserialize mod.");
 
-        Ok(Self { spec, overrides })
+        Ok(Self {
+            spec,
+            raw_overrides,
+            cutscene_mods,
+        })
     }
 
     pub fn spec(&self) -> &ModSpecification {
         &self.spec
     }
 
-    pub fn overrides(&self) -> &HashMap<String, AssetOverride> {
-        &self.overrides
+    pub fn overrides(&self) -> &HashMap<String, RawAssetOverride> {
+        &self.raw_overrides
     }
 
-    pub fn overrides_mut(&mut self) -> &mut HashMap<String, AssetOverride> {
-        &mut self.overrides
+    pub fn overrides_mut(&mut self) -> &mut HashMap<String, RawAssetOverride> {
+        &mut self.raw_overrides
+    }
+
+    pub fn affected_assets(&self) -> Vec<String> {
+        self.raw_overrides
+            .keys()
+            .chain(self.cutscene_mods.keys())
+            .cloned()
+            .collect()
     }
 
     /// Applies a Mod to an existing BNL file in memory. On success, returns the number of assets
     /// modified.
     pub fn apply(&self, bnl: &mut BNLFile) -> Result<usize, ModError> {
-        let num_overrides = self.overrides().len();
-
-        println!(
-            "Applying {num_overrides} asset override{}.",
-            if num_overrides != 1 { "s" } else { "" }
-        );
-
         let mut overrides_applied = 0usize;
 
-        for (override_aid, asset_override) in self.overrides() {
-            if let Ok(mut raw_asset) = bnl.remove_asset(override_aid) {
-                let desc_mut = raw_asset.descriptor_bytes_mut();
-                desc_mut.resize(asset_override.descriptor_bytes.len(), 0u8);
-                desc_mut.copy_from_slice(&asset_override.descriptor_bytes);
+        if !self.overrides().is_empty() {
+            println!(
+                "Applying {} asset override{}.",
+                self.overrides().len(),
+                if self.overrides().len() != 1 { "s" } else { "" }
+            );
 
-                // TODO: Resource chunks
-                /*
-                let res_mut = raw_asset.resource_chunks_mut() {
+            for (override_aid, asset_override) in self.overrides() {
+                if let Ok(mut raw_asset) = bnl.remove_asset(override_aid) {
+                    // Get the original asset in the correct type (eg. Cutscene)
+
+                    // Apply the patch to the descriptor
+                    // Re-write the asset
+
+                    let desc_mut = raw_asset.descriptor_bytes_mut();
+                    desc_mut.resize(asset_override.descriptor_bytes.len(), 0u8);
+                    desc_mut.copy_from_slice(&asset_override.descriptor_bytes);
+
+                    // TODO: Resource chunks
+                    /*
+                    let res_mut = raw_asset.resource_chunks_mut() {
+                    }
+                    */
+
+                    overrides_applied += 1;
+
+                    bnl.append_raw_asset(raw_asset);
+                } else {
+                    continue;
                 }
-                */
+            }
+        }
 
-                overrides_applied += 1;
+        if !self.cutscene_mods.is_empty() {
+            for (mod_name, cutscene_mod) in &self.cutscene_mods {
+                if let Err(e) = bnl.modify_asset(
+                    mod_name,
+                    |cutscene: &mut crate::asset::Asset<crate::asset::cutscene::Cutscene>| {
+                        if let Some(length) = cutscene_mod.length {
+                            cutscene.asset_mut().descriptor.length = length
+                        }
 
-                bnl.append_raw_asset(raw_asset);
-            } else {
-                continue;
+                        overrides_applied += 1;
+                        Ok(())
+                    },
+                ) {
+                    match e {
+                        crate::asset::AssetError::NotFound => (),
+                        _ => eprintln!("Failed to apply cutscene mod: {e}"),
+                    };
+                }
             }
         }
 
