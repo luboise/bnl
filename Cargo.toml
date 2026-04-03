@@ -27,6 +27,8 @@ wavers = "1.5.1"
 ntest = "0.9.3"
 serde-ordered-collections = "2.0.0"
 regex = "1.12.2"
+binrw = "0.15.1"
+strum = { version = "0.28.0", features = ["derive"] }
 
 [lib]
 name = "bnl"

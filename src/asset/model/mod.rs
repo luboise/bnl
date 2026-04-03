@@ -2,8 +2,12 @@ pub mod gltf;
 pub mod nd;
 pub mod sub_main;
 
-use std::{collections::HashMap, io::{Cursor, Seek, SeekFrom}};
+use std::{
+    collections::HashMap,
+    io::{Cursor, Seek, SeekFrom},
+};
 
+use binrw::{BinRead, binrw};
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -11,8 +15,8 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use crate::{
     VirtualResource,
     asset::{
-         AssetDescriptor, AssetLike, AssetParseError, AssetType,
-        model::sub_main::{ MeshDescriptor},
+        AssetDescriptor, AssetLike, AssetParseError, AssetType,
+        model::sub_main::ModelSubresource,
         texture::{Texture, TextureDescriptor},
     },
 };
@@ -23,10 +27,13 @@ pub struct Model {
     // subresource_descriptors: Vec<ModelSubresourceDescriptor>,
     // meshes: Vec<Mesh>,
     textures: Vec<Texture>,
-    resource: Vec<u8>
+    resource: Vec<u8>,
 }
 
+#[binrw]
+#[bw(repr = u32)]
 #[repr(u32)]
+#[br(repr = u32)]
 #[derive(Debug, Clone, TryFromPrimitive, IntoPrimitive)]
 pub enum ModelSubresType {
     Mesh = 0x00,
@@ -59,6 +66,45 @@ pub(crate) struct RawModelSubresource {
     subres_param: u32,
 }
 
+#[binrw]
+#[derive(Debug, Clone)]
+struct ModelSubresHeader {
+    subres_type: ModelSubresType,
+    ptr: u32,
+}
+
+#[binrw]
+#[derive(Debug)]
+pub struct RawModelDescriptor {
+    // TODO: Use bw calc
+    #[br(temp)]
+    #[bw(ignore)]
+    footer_ptr: u32,
+
+    #[br(temp)]
+    #[bw(ignore)]
+    num_footer_entries: u32,
+
+    #[br(count = num_footer_entries, seek_before(SeekFrom::Start(footer_ptr.into())), restore_position)]
+    footer_entries: Vec<ModelSubresHeader>,
+
+    flags: u32,
+    unknown_u32_1: u32,
+    model_runtime_context: u32,
+    unknown_u32_2: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelDescriptor {
+    flags: u32,
+    unknown_u32_1: u32,
+    unknown_u32_2: u32,
+    model_subresource: Option<ModelSubresource>,
+    texture_subresource: Vec<TextureDescriptor>,
+    other_subresources: Vec<RawModelSubresource>,
+}
+
+/*
 #[derive(Debug, Clone)]
 pub struct ModelDescriptor {
     subresources_offset: u32,
@@ -67,22 +113,31 @@ pub struct ModelDescriptor {
     texture_descriptors: Vec<TextureDescriptor>,
     mesh_descriptors: Vec<MeshDescriptor>,
 }
+*/
 
 impl ModelDescriptor {
-    pub fn mesh_descriptors(&self) -> &[MeshDescriptor] {
-        &self.mesh_descriptors
+    pub fn model_subresource(&self) -> Option<&ModelSubresource> {
+        self.model_subresource.as_ref()
     }
 
     pub fn key_value_map(&self) -> Option<&HashMap<String, Vec<u8>>> {
-        self.mesh_descriptors.iter().find_map(|mesh|{
-            (!mesh.key_value_map.is_empty()).then_some(&mesh.key_value_map)
-        })
+        self.model_subresource
+            .iter()
+            .find_map(|mesh| (!mesh.key_value_map.is_empty()).then_some(&mesh.key_value_map))
     }
-
 }
 
 impl AssetDescriptor for ModelDescriptor {
     fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError> {
+        let RawModelDescriptor {
+            footer_entries,
+            flags,
+            unknown_u32_1,
+            model_runtime_context: _,
+            unknown_u32_2,
+        } = RawModelDescriptor::read_le(&mut Cursor::new(data))
+            .map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
+
         let data_size = data.len() as u32;
 
         if data_size < size_of::<ModelDescriptor>() as u32 {
@@ -93,70 +148,33 @@ impl AssetDescriptor for ModelDescriptor {
             return Err(AssetParseError::InputTooSmall);
         }
 
-        let subresources_offset = u32::from_le_bytes(data[0..4].try_into().unwrap_or_default());
-        let subresource_count = u32::from_le_bytes(data[4..8].try_into().unwrap_or_default());
+        let mut model_subresource = None;
+        let mut texture_subresource = vec![];
+        let mut other_subresources = vec![];
 
-        if subresources_offset > data_size
-            || (subresource_count * 8) > data_size - subresources_offset
-        {
-            return Err(AssetParseError::InputTooSmall);
-        }
-
-        let mut cur = Cursor::new(data);
-
-        cur.seek(SeekFrom::Start(subresources_offset as u64))?;
-
-        let mut raw_subresources = vec![];
-        let mut texture_descriptors = vec![];
-        let mut mesh_descriptors = vec![];
-
-        for _ in 0..subresource_count {
-            let subres_type: ModelSubresType = cur
-                .read_u32::<LittleEndian>()
-                .map_err(|_| AssetParseError::ErrorParsingDescriptor)?
-                .try_into()
-                .map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
-
-            let subres_param = cur
-                .read_u32::<LittleEndian>()
-                .map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
-
-            raw_subresources.push(RawModelSubresource {
-                subres_type: subres_type
-                    .clone()
-                    .try_into()
-                    .map_err(|_| AssetParseError::ErrorParsingDescriptor)?,
-                subres_param,
-            });
+        for ModelSubresHeader { subres_type, ptr } in footer_entries {
+            let mut cur = Cursor::new(data);
+            cur.seek(SeekFrom::Start(ptr.into()))?;
 
             match subres_type {
                 ModelSubresType::Texture => {
-                    let mut tex_cur = Cursor::new(data);
-                    tex_cur.seek(SeekFrom::Start(subres_param as u64))?;
+                    let texture_list_count = cur.read_u32::<LittleEndian>()?;
+                    let texture_list_offset = cur.read_u32::<LittleEndian>()?;
 
-                    let texture_list_count = tex_cur.read_u32::<LittleEndian>()?;
-                    let texture_list_offset = tex_cur.read_u32::<LittleEndian>()?;
-
-                    tex_cur.seek(SeekFrom::Start(texture_list_offset as u64))?;
+                    cur.seek(SeekFrom::Start(texture_list_offset as u64))?;
 
                     for _ in 0..texture_list_count {
-                        let ptr = tex_cur.read_u32::<LittleEndian>()? as usize;
-
-                        let slice = &data[ptr..];
-                        let tex_desc = TextureDescriptor::from_bytes(slice)?;
-
-                        texture_descriptors.push(tex_desc);
+                        let ptr = cur.read_u32::<LittleEndian>()? as usize;
+                        texture_subresource.push(TextureDescriptor::from_bytes(&data[ptr..])?);
                     }
                 }
                 ModelSubresType::Mesh => {
-                    let mut mesh_cur = cur.clone();
-
-                    mesh_cur.seek(SeekFrom::Start(subres_param as u64))?;
+                    cur.seek(SeekFrom::Start(ptr as u64))?;
 
                     let mut mesh_ptrs = Vec::new();
 
                     loop {
-                        let ptr = mesh_cur.read_u32::<LittleEndian>()? as usize;
+                        let ptr = cur.read_u32::<LittleEndian>()? as usize;
                         if ptr == 0 {
                             break;
                         }
@@ -165,19 +183,25 @@ impl AssetDescriptor for ModelDescriptor {
 
                     for ptr in mesh_ptrs {
                         // TODO: Bounds check for ptr
-                        mesh_descriptors.push(MeshDescriptor::from_bytes(&data[ptr..])?);
+                        model_subresource = Some(ModelSubresource::from_bytes(&data[ptr..])?);
                     }
                 }
-                _ => {}
+                _ => {
+                    other_subresources.push(RawModelSubresource {
+                        subres_type,
+                        subres_param: ptr,
+                    });
+                }
             };
         }
 
         Ok(ModelDescriptor {
-            subresources_offset,
-            subresource_count,
-            raw_subresources,
-            texture_descriptors,
-            mesh_descriptors,
+            flags,
+            unknown_u32_1,
+            unknown_u32_2,
+            model_subresource,
+            other_subresources,
+            texture_subresource,
         })
     }
 
@@ -210,10 +234,10 @@ impl AssetLike for Model {
         let mut model = Model {
             descriptor: descriptor.clone(),
             textures: vec![],
-            resource: virtual_res.get_all_bytes()
+            resource: virtual_res.get_all_bytes(),
         };
 
-        for subtex_desc in &model.descriptor.texture_descriptors {
+        for subtex_desc in &model.descriptor.texture_subresource {
             model.textures.push(Texture::new(
                 subtex_desc.clone(),
                 virtual_res
@@ -224,12 +248,10 @@ impl AssetLike for Model {
                     .map_err(|e| {
                         AssetParseError::InvalidDataViews(
                             format!("Unable to get section of Virtual Resource required for texture. Error: {}", e)
-                               
                         )
                     })?,
             ));
         }
-
         Ok(model)
     }
 

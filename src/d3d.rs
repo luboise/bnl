@@ -1,4 +1,4 @@
-use gltf_writer::gltf::{self, GltfError};
+use gltf_writer::gltf::{self};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::Serialize;
 
@@ -233,9 +233,9 @@ pub enum D3DFormat {
     ForceDWORD = 0x7fffffff,
 }
 
-impl Into<u32> for D3DFormat {
-    fn into(self) -> u32 {
-        match self {
+impl From<D3DFormat> for u32 {
+    fn from(value: D3DFormat) -> Self {
+        match value {
             D3DFormat::Swizzled(v) => v.into(),
             D3DFormat::Luminance(v) => v.into(),
             D3DFormat::Standard(v) => v.into(),

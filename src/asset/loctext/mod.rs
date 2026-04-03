@@ -54,7 +54,7 @@ impl LoctextResource {
 
         let mut hashes = vec![];
 
-        let mut loctext_map: HashMap<String, String> = HashMap::new();
+        // let loctext_map: HashMap<String, String> = HashMap::new();
 
         let mut keys_map: HashMap<String, u16> = HashMap::new();
         let mut values_map: HashMap<u16, String> = HashMap::new();
@@ -107,8 +107,8 @@ impl LoctextResource {
 
             hashes.resize(hash_list_length as usize, 0);
 
-            for i in 0..hash_list_length as usize {
-                hashes[i] = cur.read_u16::<LittleEndian>()?;
+            for hash in hashes.iter_mut().take(hash_list_length as usize) {
+                *hash = cur.read_u16::<LittleEndian>()?;
             }
 
             // Find all values and the associated hash for each one
@@ -181,7 +181,7 @@ impl LoctextResource {
             str_cur.read_exact(&mut key_chars)?;
 
             keys_map = (0..keys_list_length as usize)
-                .map(|i| -> Result<_, AssetParseError> {
+                .map(|_| -> Result<_, AssetParseError> {
                     let hash = cur.read_u16::<LittleEndian>()?;
                     let value_index = cur.read_u16::<LittleEndian>()?;
                     let chars_offset = cur.read_u32::<LittleEndian>()?;
@@ -242,7 +242,7 @@ impl LoctextResource {
     pub fn dump(&self) -> Result<Vec<u8>, AssetParseError> {
         let mut values_section: Vec<u8> = vec![];
         let mut keys_section: Vec<u8> = vec![];
-        let mut unknown_section: Vec<u8> = vec![];
+        let unknown_section: Vec<u8> = vec![];
         let mut hash_list_section: Vec<u8> = vec![];
 
         #[repr(C)]

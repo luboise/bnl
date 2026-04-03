@@ -16,6 +16,7 @@ pub enum AnimValueUsageType {
     Unused,
 }
 
+#[expect(unused)]
 #[derive(Debug, Clone)]
 pub struct Vec3UsageType {
     x: AnimValueUsageType,
@@ -576,10 +577,10 @@ impl Anim {
 
                             let mut q = Quaternion { x, y, z, w };
 
-                            if let Some(q2) = prev_quat.take() {
-                                if q.dot(&q2) < 0.0 {
-                                    q = -q;
-                                }
+                            if let Some(q2) = prev_quat.take()
+                                && q.dot(&q2) < 0.0
+                            {
+                                q = -q;
                             }
 
                             prev_quat = Some(q.clone());

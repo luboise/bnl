@@ -37,6 +37,7 @@ impl Display for VirtualResourceError {
     }
 }
 
+#[expect(unused)]
 impl VirtualResource<'_> {
     pub(crate) fn from_dvl<'a>(
         dataview_list: &DataViewList,

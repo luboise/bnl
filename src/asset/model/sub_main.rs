@@ -15,7 +15,7 @@ const MESH_HEADER_SIZE: usize = 40;
 
 #[derive(Debug)]
 pub struct Mesh {
-    header: MeshDescriptor,
+    header: ModelSubresource,
     primitives: Vec<Nd>,
 }
 
@@ -72,7 +72,7 @@ impl Mesh {
 
 #[repr(C)]
 #[derive(Debug, Clone)]
-pub struct MeshDescriptor {
+pub struct ModelSubresource {
     pub(crate) unknown1: u32,
     pub(crate) unknown2: u32,
     pub(crate) primitive_ptrs_start: u32,
@@ -92,7 +92,7 @@ impl From<io::Error> for SubresourceError {
     }
 }
 
-impl MeshDescriptor {
+impl ModelSubresource {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SubresourceError> {
         let mut cur = Cursor::new(bytes);
 
@@ -174,7 +174,7 @@ impl MeshDescriptor {
             }
         }
 
-        Ok(MeshDescriptor {
+        Ok(ModelSubresource {
             unknown1,
             unknown2,
             primitive_ptrs_start,

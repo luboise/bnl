@@ -93,10 +93,9 @@ impl<'cl> Iterator for CueListIterator<'cl> {
                     .cue_list_descriptor
                     .groups
                     .get(self.current_group_index)
+                    && let Some(cue) = group.cues.get(self.current_cue_index)
                 {
-                    if let Some(cue) = group.cues.get(self.current_cue_index) {
-                        return Some((&group.name, cue));
-                    }
+                    return Some((&group.name, cue));
                 }
             }
         }
@@ -106,7 +105,7 @@ impl<'cl> Iterator for CueListIterator<'cl> {
 }
 
 impl CueListDescriptor {
-    pub fn cues(&self) -> CueListIterator {
+    pub fn cues(&self) -> CueListIterator<'_> {
         CueListIterator::new(self)
     }
 }

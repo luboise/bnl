@@ -164,7 +164,9 @@ impl Dump for Texture {
         let file = File::create(path)?;
         let w = &mut BufWriter::new(file);
 
-        self.to_rgba_image()?.dump_png_bytes(w);
+        self.to_rgba_image()?
+            .dump_png_bytes(w)
+            .map_err(|e| std::io::Error::other(format!("{e:?}")))?;
 
         Ok(())
     }
@@ -350,9 +352,8 @@ impl Texture {
         height: usize,
         data: &[u8],
     ) -> Result<(), TextureError> {
-        if data.len() < width * height * 4 {
-            return Err(TextureError::SizeMismatch);
-        } else if width != self.descriptor().width as usize
+        if (data.len() < width * height * 4)
+            || width != self.descriptor().width as usize
             || height != self.descriptor().height as usize
         {
             return Err(TextureError::SizeMismatch);

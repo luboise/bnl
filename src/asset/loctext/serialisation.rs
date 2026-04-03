@@ -1,8 +1,6 @@
-use std::io::{Cursor, Read};
-
-use byteorder::{LittleEndian, ReadBytesExt};
-
 use crate::asset::AssetParseError;
+use byteorder::{LittleEndian, ReadBytesExt};
+use std::io::Cursor;
 
 /*
 pub struct LoctextKey {
@@ -43,6 +41,7 @@ pub struct LoctextLocatorList {
 
 */
 
+#[expect(unused)]
 pub struct LoctextFile {
     lsbl: [u8; 4],
     values_ptr: u32,
@@ -57,6 +56,7 @@ pub struct LoctextFile {
     hash_list_ptr: u32,
 }
 
+#[expect(unused)]
 pub struct DemandHeader {
     /// TODO: Replace with an enum later once the values are known
     pub demand_asset_type: u32,

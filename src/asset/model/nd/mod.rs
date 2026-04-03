@@ -1,11 +1,9 @@
 mod push_buffer;
 mod shader;
-mod skeleton;
 mod vertex_buffer;
 
-pub use push_buffer::{DrawCall, NdBGPushBuffer, NdPushBuffer};
-pub use shader::{NdShader2, NdShaderParam2};
-pub use skeleton::NdSkeleton;
+use binrw::binrw;
+pub use push_buffer::{DrawCall, NdPushBufferData};
 pub use vertex_buffer::*;
 
 pub(crate) mod prelude {
@@ -17,7 +15,7 @@ pub(crate) mod prelude {
     pub use super::ModelSlice;
     pub use crate::asset::AssetParseError;
     pub use crate::asset::model::gltf::NdGltfContext;
-    pub use crate::asset::model::nd::{NdHeader, NdNode};
+    pub use crate::asset::model::nd::NdNode;
 
     pub use super::NdError;
 
@@ -28,17 +26,13 @@ pub(crate) mod prelude {
 
 use std::{
     collections::HashMap,
-    fmt::Display,
     io::{self},
     iter::{self},
 };
 
 use serde::{Serialize, ser::SerializeMap};
 
-use crate::asset::{
-    model::nd::{shader::NdShaderParam2Payload, skeleton::Bone},
-    param::KnownUnknown,
-};
+use crate::asset::model::nd::shader::NdShaderParam2Payload;
 
 use prelude::*;
 
@@ -55,112 +49,39 @@ impl From<io::Error> for NdError {
 }
 
 pub trait NdNode {
-    fn children<'a>(&'a self) -> impl Iterator<Item = &'a Nd> + 'a {
-        let child = self.header().first_child.as_deref();
-
-        iter::successors(child, |node| node.header().next_sibling.as_deref())
-    }
-
-    fn header(&self) -> &NdHeader;
-
     fn add_gltf_node(
         &self,
         virtual_res: &VirtualResource,
         ctx: &mut NdGltfContext,
     ) -> Result<Option<GltfIndex>, AssetParseError>;
-
-    fn insert_into_gltf_heirarchy(
-        &self,
-        virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
-        let node_index_opt = self.add_gltf_node(virtual_res, ctx)?;
-
-        let type_string = self.header().nd_type.to_string();
-
-        /*
-        let mut parent = GltfIndex::MAX;
-        let mut grandparent: Option<GltfIndex> = Some(GltfIndex::MAX);
-        */
-
-        let indentation = String::from_utf8(vec![b' '; 4 * ctx.node_stack.len()]).unwrap();
-
-        // Push self, then handle child, then unpush self
-        if let Some(node_index) = &node_index_opt {
-            ctx.push_node(*node_index);
-
-            println!(
-                "{}Pushing {} {}, onto stack.",
-                &indentation, type_string, node_index
-            );
-        }
-
-        if let Some(child) = self.header().first_child() {
-            child.insert_into_gltf_heirarchy(virtual_res, ctx)?;
-        }
-
-        if node_index_opt.is_some() {
-            ctx.pop_node();
-
-            println!(
-                "{}Removing {} {} from stack.",
-                indentation,
-                type_string,
-                node_index_opt.unwrap()
-            );
-        }
-
-        if let Some(next_sibling) = self.header().next_sibling() {
-            next_sibling.insert_into_gltf_heirarchy(virtual_res, ctx)?;
-        }
-
-        Ok(node_index_opt)
-    }
 }
 
-impl From<KnownNdType> for String {
-    fn from(value: KnownNdType) -> Self {
+/*
+impl From<NdType> for String {
+    fn from(value: NdType) -> Self {
         match value {
-            KnownNdType::VertexBuffer => "ndVertexBuffer",
-            KnownNdType::PushBuffer => "ndPushBuffer",
-            KnownNdType::BGPushBuffer => "ndBGPushBuffer",
-            KnownNdType::Shader2 => "ndShader2",
-            KnownNdType::VertexShader => "ndVertexShader",
-            KnownNdType::ShaderParam2 => "ndShaderParam2",
-            KnownNdType::Group => "ndGroup",
-            KnownNdType::Skeleton => "ndSkeleton",
+            NdType::VertexBuffer => "ndVertexBuffer",
+            NdType::PushBuffer => "ndPushBuffer",
+            NdType::BGPushBuffer => "ndBGPushBuffer",
+            NdType::Shader2 => "ndShader2",
+            NdType::VertexShader => "ndVertexShader",
+            NdType::ShaderParam2 => "ndShaderParam2",
+            NdType::Group => "ndGroup",
+            NdType::Skeleton => "ndSkeleton",
         }
         .to_string()
     }
 }
+*/
 
-pub(crate) const NDHEADER_SIZE: usize = 32;
-
-#[derive(Debug, Clone)]
-pub struct NdHeader {
-    pub name_ptr: u32,
-    pub nd_type: NdType,
-    pub unknown_u16: u16, // Possibly index
-    pub unknown_ptr1: u32,
-    pub unknown_ptr2: u32,
-    pub unknown_u32: u32,
-    pub first_child_ptr: u32,
-    pub next_sibling_ptr: u32,
-    pub parent_ptr: u32,
-
-    // DO NOT SERIALISE
-    first_child: Option<Box<Nd>>,
-    next_sibling: Option<Box<Nd>>,
-}
-
-impl Serialize for NdHeader {
+impl Serialize for Nd {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let mut map = serializer.serialize_map(None)?;
 
-        map.serialize_entry("type", &self.nd_type.to_string())?;
+        map.serialize_entry("type", &self.nd_type().to_string())?;
 
         let children: Vec<&Nd> = self.children().collect();
         map.serialize_entry("children", &children)?;
@@ -169,32 +90,46 @@ impl Serialize for NdHeader {
     }
 }
 
-impl NdHeader {
+impl Nd {
+    pub fn new(ctx: &mut ModelReadContext, model_slice: ModelSlice) -> Result<Self, NdError> {
+        let slice = model_slice.slice();
+        Nd::from_bytes(ctx, slice, model_slice.read_start as u32)
+    }
+
     pub fn from_bytes(
         ctx: &mut ModelReadContext,
         bytes: &[u8],
-        header_start: u32,
-    ) -> Result<NdHeader, NdError> {
+        nd_start_offset: u32,
+    ) -> Result<Nd, NdError> {
         let mut cur = Cursor::new(bytes);
 
-        cur.seek(SeekFrom::Start(header_start as u64))?;
+        cur.seek(SeekFrom::Start(nd_start_offset as u64))?;
 
         let name_ptr = cur.read_u32::<LittleEndian>()?;
 
         // TODO: Sanity check name against name ptr
-        let type_u16 = cur.read_u16::<LittleEndian>()?;
-        let unknown_u16 = cur.read_u16::<LittleEndian>()?;
+        let (type_u16, unknown_u16) = (
+            cur.read_u16::<LittleEndian>()?,
+            cur.read_u16::<LittleEndian>()?,
+        );
 
-        let unknown_ptr1 = cur.read_u32::<LittleEndian>()?;
-        let unknown_ptr2 = cur.read_u32::<LittleEndian>()?;
-        let unknown_u32 = cur.read_u32::<LittleEndian>()?;
-
-        let first_child_ptr = cur.read_u32::<LittleEndian>()?;
-        let next_sibling_ptr = cur.read_u32::<LittleEndian>()?;
-        let parent_ptr = cur.read_u32::<LittleEndian>()?;
+        let (
+            unknown_ptr1,
+            unknown_ptr2,
+            unknown_u32,
+            first_child_ptr,
+            next_sibling_ptr,
+            parent_ptr,
+        ) = (
+            cur.read_u32::<LittleEndian>()?,
+            cur.read_u32::<LittleEndian>()?,
+            cur.read_u32::<LittleEndian>()?,
+            cur.read_u32::<LittleEndian>()?,
+            cur.read_u32::<LittleEndian>()?,
+            cur.read_u32::<LittleEndian>()?,
+        );
 
         // Processing
-
         let mut name_cur = cur.clone();
         name_cur.seek(SeekFrom::Start(name_ptr as u64))?;
 
@@ -211,7 +146,7 @@ impl NdHeader {
             NdError::CreationFailure(format!("Failed to parse nd string name\n{}", e))
         })?;
 
-        let nd_type: NdType = name.into();
+        let nd_type: NdType = name.parse().unwrap_or(NdType::Other(0));
 
         let first_child = match first_child_ptr {
             0 => None,
@@ -241,9 +176,201 @@ impl NdHeader {
             ),
         };
 
-        Ok(NdHeader {
-            name_ptr,
-            nd_type,
+        let data: Result<NdData, NdError> = match nd_type {
+            NdType::VertexBuffer => {
+                let resource_views_ptr = cur.read_u32::<LittleEndian>()?;
+                let num_resource_views = cur.read_u32::<LittleEndian>()?;
+
+                let mut resource_views = Vec::with_capacity(num_resource_views as usize);
+
+                for _ in 0..num_resource_views {
+                    resource_views.push(res_view::VertexBufferResourceView::from_cursor(&mut cur)?);
+                }
+
+                Ok(NdData::VertexBuffer {
+                    resource_views_ptr,
+                    num_resource_views,
+                    resource_views,
+                })
+            }
+            NdType::PushBuffer | NdType::BGPushBuffer => {
+                let push_buffer = {
+                    let num_draws = cur.read_u32::<LittleEndian>()?;
+                    let unknown_u32_1 = cur.read_u32::<LittleEndian>()?;
+                    let unknown_u32_2 = cur.read_u32::<LittleEndian>()?;
+                    let unknown_u32_3 = cur.read_u32::<LittleEndian>()?;
+
+                    let data_pointers_start = cur.read_u32::<LittleEndian>()?;
+                    let primitive_types_list_ptr = cur.read_u32::<LittleEndian>()?;
+                    let vertex_counts_list_ptr = cur.read_u32::<LittleEndian>()?;
+
+                    let prevent_culling_flag = cur.read_u8()?;
+                    let mut padding = [0u8; 3];
+
+                    cur.read_exact(&mut padding)?;
+
+                    let mut data_ptr_cur = cur.clone();
+                    data_ptr_cur.seek(SeekFrom::Start(data_pointers_start as u64))?;
+
+                    let mut prim_type_ptr = cur.clone();
+                    prim_type_ptr.seek(SeekFrom::Start(primitive_types_list_ptr as u64))?;
+
+                    let mut vertex_counts_ptr = cur.clone();
+                    vertex_counts_ptr.seek(SeekFrom::Start(vertex_counts_list_ptr as u64))?;
+
+                    let mut draw_calls = Vec::with_capacity(num_draws as usize);
+
+                    // TODO: FIGURE OUT IF THIS GOES HERE
+                    let mut min = u32::MAX;
+                    let mut max = u32::MIN;
+
+                    for _ in 0..num_draws as usize {
+                        let data_ptr = data_ptr_cur.read_u32::<LittleEndian>()?;
+                        let prim_type = prim_type_ptr.read_u32::<LittleEndian>()?.into();
+                        let num_vertices = vertex_counts_ptr.read_u32::<LittleEndian>()?;
+                        let data_size = num_vertices * size_of::<u16>() as u32;
+
+                        if data_ptr < min {
+                            min = data_ptr;
+                        }
+                        if data_ptr + data_size > max {
+                            max = data_ptr + data_size;
+                        }
+
+                        draw_calls.push(DrawCall {
+                            data_ptr,
+                            prim_type,
+                            num_vertices,
+                        });
+                    }
+
+                    let push_buffer_base = min;
+                    let push_buffer_size = (max - min) as usize;
+
+                    let buffer_bytes = bytes
+                        [push_buffer_base as usize..push_buffer_base as usize + push_buffer_size]
+                        .to_vec();
+
+                    NdPushBufferData {
+                        num_draws,
+                        unknown_u32_1,
+                        unknown_u32_2,
+                        unknown_u32_3,
+                        //
+                        data_pointers_start,
+                        primitive_types_list_ptr,
+                        vertex_counts_list_ptr,
+                        //
+                        prevent_culling_flag,
+                        padding,
+                        //
+                        buffer_bytes,
+                        push_buffer_base,
+                        push_buffer_size: push_buffer_size as u32,
+
+                        draw_calls,
+                    }
+                };
+
+                if nd_type == NdType::BGPushBuffer {
+                    let unknown_ptr_1 = cur.read_u32::<LittleEndian>()?;
+                    let unknown_ptr_2 = cur.read_u32::<LittleEndian>()?;
+
+                    Ok(NdData::BGPushBuffer {
+                        push_buffer,
+                        unknown_ptr_1,
+                        unknown_ptr_2,
+                    })
+                } else {
+                    Ok(NdData::PushBuffer(push_buffer))
+                }
+            }
+            NdType::Group => {
+                // NdGroup spotted
+                Ok(NdData::Group)
+            }
+            NdType::ShaderParam2 => {
+                let main_payload_ptr = cur.read_u32::<LittleEndian>()?;
+                let sub_payload_ptr = cur.read_u32::<LittleEndian>()?;
+
+                let main_payload = NdShaderParam2Payload::from_model_slice(&ModelSlice {
+                    slice: bytes,
+                    read_start: main_payload_ptr as usize,
+                })?;
+
+                let sub_payload = match sub_payload_ptr {
+                    0 => None,
+                    val => Some(NdShaderParam2Payload::from_model_slice(&ModelSlice {
+                        slice: bytes,
+                        read_start: val as usize,
+                    })?),
+                };
+
+                Ok(NdData::ShaderParam2 {
+                    main_payload,
+                    sub_payload,
+                })
+            }
+            NdType::Skeleton => {
+                let num_bones = cur.read_u32::<LittleEndian>()?;
+                let bones_ptr = cur.read_u32::<LittleEndian>()?;
+
+                let bones = if bones_ptr != 0 && num_bones > 0 {
+                    let mut bones = Vec::with_capacity(num_bones as usize);
+
+                    cur.seek(SeekFrom::Start(bones_ptr as u64))?;
+
+                    for i in 0..num_bones {
+                        bones.push(Bone {
+                            name: ctx.get_bone_name(i).map(|v| v.into()),
+                            parent_id: cur.read_u16::<LittleEndian>()?,
+                            id: cur.read_u16::<LittleEndian>()?,
+                            local_transform: [
+                                cur.read_f32::<LittleEndian>()?,
+                                cur.read_f32::<LittleEndian>()?,
+                                cur.read_f32::<LittleEndian>()?,
+                            ],
+                            global_transform: [
+                                cur.read_f32::<LittleEndian>()?,
+                                cur.read_f32::<LittleEndian>()?,
+                                cur.read_f32::<LittleEndian>()?,
+                            ],
+                            sentinel: cur.read_u32::<LittleEndian>()?.to_le_bytes(),
+                        });
+                    }
+
+                    bones
+                } else {
+                    vec![]
+                };
+
+                Ok(NdData::Skeleton { bones })
+            }
+            NdType::Shader2 => Ok(NdData::Shader2),
+            NdType::VertexShader => Ok(NdData::VertexShader),
+            NdType::RigidSkinIdx | NdType::MtxArray | NdType::BlendShape | NdType::Other(_) => Ok(
+                NdData::Unknown(nd_type, nd_type.to_string(), Vec::default()),
+            ),
+        };
+
+        /*
+        let data = match nd_type {
+            NdType::Group => {}
+            NdType::Skeleton => todo!(),
+            NdType::RigidSkinIdx => todo!(),
+            NdType::MtxArray => todo!(),
+            NdType::Shader2 => todo!(),
+            NdType::ShaderParam2 => todo!(),
+            NdType::VertexBuffer => todo!(),
+            NdType::PushBuffer => todo!(),
+            NdType::VertexShader => todo!(),
+            NdType::BGPushBuffer => todo!(),
+            NdType::BlendShape => todo!(),
+            NdType::Other(_) => todo!(),
+        };
+        */
+
+        Ok(Self {
             unknown_u16,
             unknown_ptr1,
             unknown_ptr2,
@@ -251,14 +378,14 @@ impl NdHeader {
             first_child_ptr,
             next_sibling_ptr,
             parent_ptr,
-            //
             first_child,
             next_sibling,
+            data: Box::new(data?),
         })
     }
 
     pub fn children(&self) -> impl Iterator<Item = &Nd> {
-        iter::successors(self.first_child(), |nd| nd.header().next_sibling())
+        iter::successors(self.first_child(), |nd| nd.next_sibling())
     }
 
     pub fn first_child(&self) -> Option<&Nd> {
@@ -268,164 +395,108 @@ impl NdHeader {
     pub fn next_sibling(&self) -> Option<&Nd> {
         self.next_sibling.as_deref()
     }
-}
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum KnownNdType {
-    VertexBuffer,
-    PushBuffer,
-    BGPushBuffer,
-    Shader2,
-    VertexShader,
-    ShaderParam2,
-    Skeleton,
-    Group,
-}
-
-impl Display for KnownNdType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            KnownNdType::VertexBuffer => write!(f, "ndVertexBuffer"),
-            KnownNdType::PushBuffer => write!(f, "ndPushBuffer"),
-            KnownNdType::BGPushBuffer => write!(f, "ndBGPushBuffer"),
-            KnownNdType::Shader2 => write!(f, "ndShader2"),
-            KnownNdType::VertexShader => write!(f, "ndVertexShader"),
-            KnownNdType::ShaderParam2 => write!(f, "ndShaderParam2"),
-            KnownNdType::Skeleton => write!(f, "ndSkeleton"),
-            KnownNdType::Group => write!(f, "ndGroup"),
-        }
-    }
-}
-
-impl TryFrom<String> for KnownNdType {
-    type Error = NdError;
-
-    fn try_from(value: String) -> Result<Self, Self::Error> {
-        match value.as_ref() {
-            "ndVertexBuffer" => Ok(KnownNdType::VertexBuffer),
-            "ndPushBuffer" => Ok(KnownNdType::PushBuffer),
-            "ndBGPushBuffer" => Ok(KnownNdType::BGPushBuffer),
-            "ndShader2" => Ok(KnownNdType::Shader2),
-            "ndVertexShader" => Ok(KnownNdType::VertexShader),
-            "ndShaderParam2" => Ok(KnownNdType::ShaderParam2),
-            "ndSkeleton" => Ok(KnownNdType::Skeleton),
-            "ndGroup" => Ok(KnownNdType::Group),
-            _ => Err(NdError::UnknownType),
-        }
-    }
-}
-
-type NdType = KnownUnknown<KnownNdType, String>;
-
-impl ToString for NdType {
-    fn to_string(&self) -> String {
-        match self {
-            KnownUnknown::Known(val) => val.to_string(),
-            KnownUnknown::Unknown(val) => val.clone(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NdUnknown {
-    header: NdHeader,
-}
-
-impl NdNode for NdUnknown {
-    fn header(&self) -> &NdHeader {
-        &self.header
+    #[inline]
+    pub fn nd_type(&self) -> NdType {
+        self.data.nd_type()
     }
 
-    fn add_gltf_node(
-        &self,
-        _virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
-        Ok(None)
-    }
-}
-
-impl NdUnknown {
-    pub(crate) fn header(&self) -> &NdHeader {
-        &self.header
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub enum Nd {
-    Skeleton(NdSkeleton),
-    VertexBuffer(NdVertexBuffer),
-    PushBuffer(NdPushBuffer),
-    BGPushBuffer(NdBGPushBuffer),
-    Group(NdGroup),
-    Shader2(NdShader2),
-    VertexShader(NdVertexShader),
-    ShaderParam2(NdShaderParam2),
-    Unknown(NdUnknown),
-}
-
-impl NdNode for Nd {
-    fn header(&self) -> &NdHeader {
-        match self {
-            Nd::VertexBuffer(val) => val.header(),
-            Nd::PushBuffer(val) => val.header(),
-            Nd::BGPushBuffer(val) => val.header(),
-            Nd::Group(val) => val.header(),
-            Nd::Unknown(val) => val.header(),
-            Nd::Shader2(val) => val.header(),
-            Nd::VertexShader(val) => val.header(),
-            Nd::ShaderParam2(val) => val.header(),
-            Nd::Skeleton(val) => val.header(),
-        }
-    }
-
-    fn add_gltf_node(
-        &self,
-        virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
-        match self {
-            Nd::VertexBuffer(nd) => nd.add_gltf_node(virtual_res, ctx),
-            Nd::PushBuffer(nd) => nd.add_gltf_node(virtual_res, ctx),
-            Nd::BGPushBuffer(nd) => nd.add_gltf_node(virtual_res, ctx),
-            Nd::Group(nd) => nd.add_gltf_node(virtual_res, ctx),
-            Nd::Shader2(nd) => nd.add_gltf_node(virtual_res, ctx),
-            Nd::VertexShader(nd) => nd.add_gltf_node(virtual_res, ctx),
-            Nd::ShaderParam2(nd) => nd.add_gltf_node(virtual_res, ctx),
-            Nd::Skeleton(nd) => nd.add_gltf_node(virtual_res, ctx),
-            Nd::Unknown(nd) => nd.add_gltf_node(virtual_res, ctx),
-        }
-    }
-}
-
-impl<'a> Iterator for NdIterator<'a> {
-    type Item = &'a Nd;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.current_nd?;
-
-        // If sibling
-        if let Some(x) = self.current_nd.unwrap().header().next_sibling.as_deref() {
-            self.current_nd = Some(x);
-            return Some(x);
-        }
-
-        // If child
-        if let Some(child) = self.base_nd.header().first_child() {
-            self.current_nd = Some(child);
-            self.base_nd = child;
-
-            return Some(child);
-        }
-
-        unreachable!()
-    }
-}
-
-impl Nd {
     pub fn heirarchy(&self) -> impl Iterator<Item = &Nd> {
         NdIterator::new(self)
     }
+}
+
+#[binrw]
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::EnumString, strum::Display)]
+pub enum NdType {
+    #[strum(serialize = "ndGroup")]
+    Group = 0x01,
+    #[strum(serialize = "ndSkeleton")]
+    Skeleton = 0x02,
+    #[strum(serialize = "ndRigidSkinIdx")]
+    RigidSkinIdx = 0x0b,
+    #[strum(serialize = "ndMtxArray")]
+    MtxArray = 0x0c,
+    #[strum(serialize = "ndShader2")]
+    Shader2 = 0x11,
+    #[strum(serialize = "ndShaderParam2")]
+    ShaderParam2 = 0x12,
+    #[strum(serialize = "ndVertexBuffer")]
+    VertexBuffer = 0x13,
+    #[strum(serialize = "ndPushBuffer")]
+    PushBuffer = 0x14,
+    #[strum(serialize = "ndVertexShader")]
+    VertexShader = 0x15,
+    #[strum(serialize = "ndBGPushBuffer")]
+    BGPushBuffer = 0x16,
+    #[strum(serialize = "ndBlendShape")]
+    BlendShape = 0x17,
+    #[strum(serialize = "ndUnknown")]
+    Other(u32),
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub enum NdData {
+    Skeleton {
+        bones: Vec<Bone>,
+    },
+    VertexBuffer {
+        resource_views_ptr: u32,
+        num_resource_views: u32,
+
+        #[serde(skip)]
+        resource_views: Vec<res_view::VertexBufferResourceView>,
+    },
+    PushBuffer(NdPushBufferData),
+    BGPushBuffer {
+        push_buffer: NdPushBufferData,
+        unknown_ptr_1: u32,
+        unknown_ptr_2: u32,
+    },
+    Group,
+    Shader2,
+    VertexShader,
+    ShaderParam2 {
+        main_payload: NdShaderParam2Payload,
+        sub_payload: Option<NdShaderParam2Payload>,
+    },
+    Unknown(NdType, String, Vec<u8>),
+}
+
+impl NdData {
+    pub fn nd_type(&self) -> NdType {
+        match self {
+            NdData::Skeleton { .. } => NdType::Skeleton,
+            NdData::VertexBuffer { .. } => NdType::VertexBuffer,
+            NdData::PushBuffer(_) => NdType::PushBuffer,
+            NdData::BGPushBuffer { .. } => NdType::BGPushBuffer,
+            NdData::Group => NdType::Group,
+            NdData::Shader2 => NdType::Shader2,
+            NdData::VertexShader => NdType::VertexShader,
+            NdData::ShaderParam2 { .. } => NdType::ShaderParam2,
+            NdData::Unknown(nd_type, ..) => *nd_type,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Nd {
+    // pub name_ptr: NullString,
+    // pub nd_type: NdType,
+    pub unknown_u16: u16, // Possibly index
+    pub unknown_ptr1: u32,
+    pub unknown_ptr2: u32,
+    pub unknown_u32: u32,
+    pub first_child_ptr: u32,
+    pub next_sibling_ptr: u32,
+    pub parent_ptr: u32,
+
+    // DO NOT SERIALISE
+    pub first_child: Option<Box<Self>>,
+    pub next_sibling: Option<Box<Self>>,
+
+    pub data: Box<NdData>,
 }
 
 struct NdIterator<'a> {
@@ -439,6 +510,28 @@ impl<'a> NdIterator<'a> {
             base_nd: nd,
             current_nd: Some(nd),
         }
+    }
+}
+
+impl<'a> Iterator for NdIterator<'a> {
+    type Item = &'a Nd;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // If sibling
+        if let Some(x) = self.current_nd.and_then(|nd| nd.next_sibling.as_deref()) {
+            self.current_nd = Some(x);
+            return Some(x);
+        }
+
+        // If child
+        if let Some(child) = self.base_nd.first_child() {
+            self.current_nd = Some(child);
+            self.base_nd = child;
+
+            return Some(child);
+        }
+
+        unreachable!()
     }
 }
 
@@ -505,201 +598,7 @@ impl<'a> ModelSlice<'a> {
     }
 }
 
-impl Nd {
-    pub fn new(ctx: &mut ModelReadContext, model_slice: ModelSlice) -> Result<Nd, NdError> {
-        let slice = model_slice.slice();
-
-        let mut cur = Cursor::new(slice);
-
-        let header = NdHeader::from_bytes(ctx, slice, model_slice.read_start as u32)?;
-
-        cur.seek(SeekFrom::Start(32 + model_slice.read_start as u64))?;
-
-        if let KnownUnknown::Known(nd_type) = &header.nd_type.clone() {
-            match nd_type {
-                KnownNdType::VertexBuffer => {
-                    let resource_views_ptr = cur.read_u32::<LittleEndian>()?;
-                    let num_resource_views = cur.read_u32::<LittleEndian>()?;
-
-                    let mut resource_views = Vec::with_capacity(num_resource_views as usize);
-
-                    for _ in 0..num_resource_views {
-                        resource_views
-                            .push(res_view::VertexBufferResourceView::from_cursor(&mut cur)?);
-                    }
-
-                    Ok(Nd::VertexBuffer(NdVertexBuffer {
-                        header,
-                        resource_views_ptr,
-                        num_resource_views,
-                        resource_views,
-                    }))
-                }
-                KnownNdType::PushBuffer | KnownNdType::BGPushBuffer => {
-                    let num_draws = cur.read_u32::<LittleEndian>()?;
-                    let unknown_u32_1 = cur.read_u32::<LittleEndian>()?;
-                    let unknown_u32_2 = cur.read_u32::<LittleEndian>()?;
-                    let unknown_u32_3 = cur.read_u32::<LittleEndian>()?;
-
-                    let data_pointers_start = cur.read_u32::<LittleEndian>()?;
-                    let primitive_types_list_ptr = cur.read_u32::<LittleEndian>()?;
-                    let vertex_counts_list_ptr = cur.read_u32::<LittleEndian>()?;
-
-                    let prevent_culling_flag = cur.read_u8()?;
-                    let mut padding = [0u8; 3];
-
-                    cur.read_exact(&mut padding)?;
-
-                    let mut data_ptr_cur = cur.clone();
-                    data_ptr_cur.seek(SeekFrom::Start(data_pointers_start as u64))?;
-
-                    let mut prim_type_ptr = cur.clone();
-                    prim_type_ptr.seek(SeekFrom::Start(primitive_types_list_ptr as u64))?;
-
-                    let mut vertex_counts_ptr = cur.clone();
-                    vertex_counts_ptr.seek(SeekFrom::Start(vertex_counts_list_ptr as u64))?;
-
-                    let mut draw_calls = Vec::with_capacity(num_draws as usize);
-
-                    // TODO: FIGURE OUT IF THIS GOES HERE
-                    let mut min = u32::MAX;
-                    let mut max = u32::MIN;
-
-                    for _ in 0..num_draws as usize {
-                        let data_ptr = data_ptr_cur.read_u32::<LittleEndian>()?;
-                        let prim_type = prim_type_ptr.read_u32::<LittleEndian>()?.into();
-                        let num_vertices = vertex_counts_ptr.read_u32::<LittleEndian>()?;
-                        let data_size = num_vertices * size_of::<u16>() as u32;
-
-                        if data_ptr < min {
-                            min = data_ptr;
-                        }
-                        if data_ptr + data_size > max {
-                            max = data_ptr + data_size;
-                        }
-
-                        draw_calls.push(DrawCall {
-                            data_ptr,
-                            prim_type,
-                            num_vertices,
-                        });
-                    }
-
-                    let push_buffer_base = min;
-                    let push_buffer_size = (max - min) as usize;
-
-                    let buffer_bytes = slice
-                        [push_buffer_base as usize..push_buffer_base as usize + push_buffer_size]
-                        .to_vec();
-
-                    let push_buffer = NdPushBuffer {
-                        header,
-                        num_draws,
-                        unknown_u32_1,
-                        unknown_u32_2,
-                        unknown_u32_3,
-                        //
-                        data_pointers_start,
-                        primitive_types_list_ptr,
-                        vertex_counts_list_ptr,
-                        //
-                        prevent_culling_flag,
-                        padding,
-                        //
-                        buffer_bytes,
-                        push_buffer_base,
-                        push_buffer_size: push_buffer_size as u32,
-
-                        draw_calls,
-                    };
-
-                    if *nd_type == KnownNdType::BGPushBuffer {
-                        let unknown_ptr_1 = cur.read_u32::<LittleEndian>()?;
-                        let unknown_ptr_2 = cur.read_u32::<LittleEndian>()?;
-
-                        Ok(Nd::BGPushBuffer(NdBGPushBuffer {
-                            push_buffer,
-                            unknown_ptr_1,
-                            unknown_ptr_2,
-                        }))
-                    } else {
-                        Ok(Nd::PushBuffer(push_buffer))
-                    }
-                }
-                KnownNdType::Group => {
-                    // NdGroup spotted
-                    Ok(Nd::Group(NdGroup { header }))
-                }
-                KnownNdType::ShaderParam2 => {
-                    let main_payload_ptr = cur.read_u32::<LittleEndian>()?;
-                    let sub_payload_ptr = cur.read_u32::<LittleEndian>()?;
-
-                    let main_payload = NdShaderParam2Payload::from_model_slice(
-                        &model_slice.at(main_payload_ptr as usize),
-                    )?;
-
-                    let sub_payload = match sub_payload_ptr {
-                        0 => None,
-                        val => Some(NdShaderParam2Payload::from_model_slice(
-                            &model_slice.at(val as usize),
-                        )?),
-                    };
-
-                    Ok(Nd::ShaderParam2(NdShaderParam2 {
-                        header,
-                        main_payload,
-                        sub_payload,
-                    }))
-                }
-                KnownNdType::Skeleton => {
-                    let num_bones = cur.read_u32::<LittleEndian>()?;
-                    let bones_ptr = cur.read_u32::<LittleEndian>()?;
-
-                    let bones = if bones_ptr != 0 && num_bones > 0 {
-                        let mut bones = Vec::with_capacity(num_bones as usize);
-
-                        cur.seek(SeekFrom::Start(bones_ptr as u64))?;
-
-                        for i in 0..(num_bones as u32) {
-                            bones.push(Bone {
-                                name: ctx.get_bone_name(i).map(|v| v.into()),
-                                parent_id: cur.read_u16::<LittleEndian>()?,
-                                id: cur.read_u16::<LittleEndian>()?,
-                                local_transform: [
-                                    cur.read_f32::<LittleEndian>()?,
-                                    cur.read_f32::<LittleEndian>()?,
-                                    cur.read_f32::<LittleEndian>()?,
-                                ],
-                                global_transform: [
-                                    cur.read_f32::<LittleEndian>()?,
-                                    cur.read_f32::<LittleEndian>()?,
-                                    cur.read_f32::<LittleEndian>()?,
-                                ],
-                                sentinel: cur.read_u32::<LittleEndian>()?.to_le_bytes(),
-                            });
-                        }
-
-                        bones
-                    } else {
-                        vec![]
-                    };
-
-                    Ok(Nd::Skeleton(NdSkeleton { header, bones }))
-                }
-                KnownNdType::Shader2 => Ok(Nd::Shader2(NdShader2 { header })),
-                KnownNdType::VertexShader => Ok(Nd::VertexShader(NdVertexShader { header })),
-            }
-        } else {
-            Ok(Nd::Unknown(NdUnknown { header }))
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NdGroup {
-    header: NdHeader,
-}
-
+/*
 impl NdNode for NdGroup {
     fn header(&self) -> &NdHeader {
         &self.header
@@ -716,88 +615,18 @@ impl NdNode for NdGroup {
         ))
     }
 }
+*/
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-
-    use super::*;
-
-    fn get_test_bytes() -> Vec<u8> {
-        let test_path = std::path::Path::new(file!())
-            .parent()
-            .expect("Unable to get parent directory of test.")
-            .join("test_meshes")
-            .join("test_mesh_0");
-
-        fs::read(test_path).expect("Unable to read test input.")
-    }
-
-    fn get_test_file(filename: &str) -> Vec<u8> {
-        let test_path = std::path::Path::new(file!())
-            .parent()
-            .expect("Unable to get parent directory of test.")
-            .join("test_meshes")
-            .join(filename);
-
-        fs::read(&test_path).expect("Unable to get test file")
-    }
-
-    #[test]
-    fn nd_header() {
-        let bytes = get_test_bytes();
-        NdHeader::from_bytes(
-            &mut ModelReadContext::new(&Default::default()),
-            &bytes,
-            0x34,
-        )
-        .expect("Unable to create NdHeader");
-    }
-
-    #[test]
-    fn nd_parse_test() {
-        let bytes = get_test_bytes();
-
-        Nd::new(
-            &mut ModelReadContext::new(&Default::default()),
-            ModelSlice {
-                slice: &bytes,
-                read_start: 0x34,
-            },
-        )
-        .expect("Unable to create ND");
-    }
-
-    #[test]
-    fn nd_shader_param2() {
-        let bytes = get_test_file("test_ndShaderParam2_1");
-
-        let nd = Nd::new(
-            &mut ModelReadContext::new(&Default::default()),
-            ModelSlice {
-                slice: &bytes,
-                read_start: 0,
-            },
-        )
-        .expect("Unable to create ND");
-
-        if let Nd::ShaderParam2(sp2) = nd {
-            let attribute_map = &sp2.main_payload().attribute_map();
-
-            assert_eq!(attribute_map.len(), 2, "Attribute map is wrong size.");
-
-            assert_eq!(
-                sp2.num_bound_textures(),
-                2,
-                "Number of bound textures is wrong."
-            );
-
-            assert_eq!(attribute_map.len(), 2, "Attribute map is wrong size.");
-        } else {
-            panic!(
-                "nd has wrong type {:?}, expected ndShaderParam2.",
-                dbg!(&nd)
-            );
-        }
-    }
+#[derive(Debug, Clone, Serialize)]
+pub struct Bone {
+    pub name: Option<String>,
+    pub parent_id: u16,
+    pub id: u16,
+    pub local_transform: [f32; 3],
+    pub global_transform: [f32; 3],
+    pub sentinel: [u8; 4],
 }
+
+#[path = "./tests.rs"]
+#[cfg(test)]
+mod tests;

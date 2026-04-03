@@ -9,9 +9,7 @@ pub struct DrawCall {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct NdPushBuffer {
-    pub(crate) header: NdHeader,
-
+pub struct NdPushBufferData {
     pub(crate) num_draws: u32,
     pub(crate) unknown_u32_1: u32,
     pub(crate) unknown_u32_2: u32,
@@ -31,10 +29,10 @@ pub struct NdPushBuffer {
     pub push_buffer_base: u32,
     pub(crate) push_buffer_size: u32,
 
-    pub(crate) draw_calls: Vec<DrawCall>,
+    pub draw_calls: Vec<DrawCall>,
 }
 
-impl NdPushBuffer {
+impl NdPushBufferData {
     pub fn indices(&self) -> Vec<u16> {
         self.buffer_bytes
             .chunks_exact(2)
@@ -42,17 +40,7 @@ impl NdPushBuffer {
             .collect()
     }
 
-    pub fn draw_calls(&self) -> &[DrawCall] {
-        &self.draw_calls
-    }
-}
-
-impl NdNode for NdPushBuffer {
-    fn header(&self) -> &NdHeader {
-        &self.header
-    }
-
-    fn add_gltf_node(
+    pub fn create_gltf_node(
         &self,
         _virtual_res: &VirtualResource,
         ctx: &mut NdGltfContext,
@@ -73,9 +61,9 @@ impl NdNode for NdPushBuffer {
 
         let mut primitives = Vec::new();
 
-        println!("Adding {} draw calls.", self.draw_calls().len());
+        println!("Adding {} draw calls.", self.draw_calls.len());
 
-        self.draw_calls().iter().for_each(|draw_call| {
+        self.draw_calls.iter().for_each(|draw_call| {
             let ib_accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
                 ib_view_index,
                 (draw_call.data_ptr - self.push_buffer_base) as usize,
@@ -166,37 +154,5 @@ impl NdNode for NdPushBuffer {
         Ok(None)
 
         // Ok(Some(ctx.gltf.add_node(node)))
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NdBGPushBuffer {
-    pub(crate) push_buffer: NdPushBuffer,
-    pub(crate) unknown_ptr_1: u32,
-    pub(crate) unknown_ptr_2: u32,
-}
-
-impl NdBGPushBuffer {
-    pub fn push_buffer(&self) -> &NdPushBuffer {
-        &self.push_buffer
-    }
-
-    pub fn unknown_ptr_2(&self) -> u32 {
-        self.unknown_ptr_2
-    }
-}
-
-impl NdNode for NdBGPushBuffer {
-    fn header(&self) -> &NdHeader {
-        self.push_buffer.header()
-    }
-
-    fn add_gltf_node(
-        &self,
-        virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
-        let push_buffer = self.push_buffer();
-        push_buffer.insert_into_gltf_heirarchy(virtual_res, ctx)
     }
 }
