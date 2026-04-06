@@ -3,14 +3,29 @@ use std::{collections::HashMap, fs, io, path::Path};
 use crate::{
     BNLFile,
     asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType, Parse, aidlist::AidList},
+    get_aid_list,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct BNLMod {
+    /// Assets to find and add to this scene
+    add: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ModSpecification {
     version: u32,
     name: String,
+    bnl_edits: HashMap<String, BNLMod>,
+}
+
+#[derive(Debug)]
+pub struct ModContext {
+    pub bnl_basename: String,
+    pub all_bnl_paths: Vec<std::path::PathBuf>,
+    pub cached_assets: HashMap<String, crate::RawAsset>,
 }
 
 #[derive(Debug)]
@@ -89,8 +104,9 @@ impl Mod {
             spec: ModSpecification {
                 version: 0,
                 name: name.as_ref().to_string(),
+                bnl_edits: HashMap::default(),
             },
-            raw_overrides: Default::default(),
+            raw_overrides: HashMap::default(),
             cutscene_mods: HashMap::new(),
         }
     }
@@ -346,7 +362,11 @@ impl Mod {
 
     /// Applies a Mod to an existing BNL file in memory. On success, returns the number of assets
     /// modified.
-    pub fn apply(&self, bnl: &mut BNLFile) -> Result<usize, ModError> {
+    pub fn apply(
+        &self,
+        ctx: &mut ModContext,
+        bnl: &mut BNLFile,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
         let mut overrides_applied = 0usize;
 
         if !self.overrides().is_empty() {
@@ -400,6 +420,49 @@ impl Mod {
                         _ => eprintln!("Failed to apply cutscene mod: {e}"),
                     };
                 }
+            }
+        }
+
+        if let Some((_, bnl_mod)) = self
+            .spec
+            .bnl_edits
+            .iter()
+            .find(|(k, _v)| **k == ctx.bnl_basename)
+        {
+            for aid_to_add in &bnl_mod.add {
+                println!("Adding {} to {}", aid_to_add, ctx.bnl_basename);
+
+                let raw_asset = {
+                    if let Some(raw) = ctx.cached_assets.get(aid_to_add) {
+                        raw
+                    } else {
+                        let new_cached_asset = ctx
+                            .all_bnl_paths
+                            .iter()
+                            .find_map(|path| {
+                                // TODO: Display errors here properly
+                                let bytes = std::fs::read(path).ok()?;
+
+                                if get_aid_list(&bytes).ok()?.contains(aid_to_add) {
+                                    Some(
+                                        BNLFile::from_bytes(&bytes)
+                                            .ok()?
+                                            .get_raw_asset(aid_to_add)?
+                                            .to_owned(),
+                                    )
+                                } else {
+                                    None
+                                }
+                            })
+                            .ok_or_else(|| "Unable to get asset".to_string())?;
+
+                        ctx.cached_assets
+                            .insert(aid_to_add.clone(), new_cached_asset);
+                        ctx.cached_assets.get(aid_to_add).unwrap()
+                    }
+                };
+
+                bnl.upsert_raw_asset(raw_asset.clone());
             }
         }
 

@@ -462,6 +462,8 @@ impl TryFrom<&str> for AssetType {
         match value {
             "texture" => Ok(AssetType::ResTexture),
             "anim" => Ok(AssetType::ResAnim),
+            "animevents" => Ok(AssetType::ResAnimEvents),
+            "actorgoals" => Ok(AssetType::ResActorGoals),
             "unknown3" => Ok(AssetType::ResUnknown3),
             "model" => Ok(AssetType::ResModel),
             "animevent" => Ok(AssetType::ResAnimEvents),
@@ -485,6 +487,7 @@ impl TryFrom<&str> for AssetType {
             "particle" => Ok(AssetType::ResParticle),
             "rumble" => Ok(AssetType::ResRumble),
             "shakecam" => Ok(AssetType::ResShakeCam),
+            "xsoundbank" => Ok(AssetType::ResXSoundbank),
             _ => Err(AssetError::TypeMismatch),
         }
     }

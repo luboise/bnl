@@ -18,8 +18,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let affected_assets = modification.affected_assets();
 
+    let mut ctx = bnl::modding::ModContext {
+        bnl_basename: String::default(),
+        all_bnl_paths: vec![],
+        cached_assets: std::collections::HashMap::default(),
+    };
+
+    ctx.all_bnl_paths = bnl_paths.clone();
+
     for bnl_path in bnl_paths {
         let bnl_bytes = std::fs::read(&bnl_path)?;
+
+        ctx.bnl_basename = bnl_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_owned())
+            .unwrap();
 
         let aid_list = bnl::get_aid_list(&bnl_bytes).expect("BAD");
 
@@ -34,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         let mut bnl = bnl::BNLFile::from_bytes(&bnl_bytes).expect("Stupid bnl error");
 
-        let num_applied = modification.apply(&mut bnl)?;
+        let num_applied = modification.apply(&mut ctx, &mut bnl)?;
         if num_applied > 0 {
             println!(
                 "Applied {num_applied} modifications to {}",

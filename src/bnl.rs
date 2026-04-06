@@ -833,6 +833,19 @@ impl BNLFile {
     pub fn append_raw_asset(&mut self, new_raw_asset: RawAsset) {
         self.assets.push(new_raw_asset);
     }
+
+    /// Inserts a RawAsset into a BNLFile, replacing it if it already exists.
+    pub fn upsert_raw_asset(&mut self, new_raw_asset: RawAsset) {
+        if let Some(asset) = self
+            .assets
+            .iter_mut()
+            .find(|asset| asset.name() == new_raw_asset.name())
+        {
+            *asset = new_raw_asset;
+        } else {
+            self.assets.push(new_raw_asset);
+        }
+    }
 }
 
 #[derive(Debug)]
