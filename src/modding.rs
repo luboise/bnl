@@ -16,9 +16,11 @@ pub struct BNLMod {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModSpecification {
-    version: u32,
-    name: String,
-    bnl_edits: HashMap<String, BNLMod>,
+    pub version: u32,
+    pub name: String,
+    #[serde(default)]
+    pub asset_groups: HashMap<String, Vec<String>>,
+    pub bnl_edits: HashMap<String, BNLMod>,
 }
 
 #[derive(Debug)]
@@ -104,6 +106,7 @@ impl Mod {
             spec: ModSpecification {
                 version: 0,
                 name: name.as_ref().to_string(),
+                asset_groups: HashMap::default(),
                 bnl_edits: HashMap::default(),
             },
             raw_overrides: HashMap::default(),
@@ -185,8 +188,6 @@ impl Mod {
                             raw_override_dir.display()
                         ),
                     })?;
-
-                // eg. aid_aidlist_ghoulies_sceneorder_game
 
                 let Some((_, [raw_asset_type, _asset_category, _asset_entry])) =
                     re.captures(override_aid).map(|caps| caps.extract())
@@ -429,11 +430,28 @@ impl Mod {
             .iter()
             .find(|(k, _v)| **k == ctx.bnl_basename)
         {
-            for aid_to_add in &bnl_mod.add {
+            // Flatten asset_group entries into a giant aid list
+            let mut bnl_list = bnl_mod
+                .add
+                .iter()
+                .flat_map(|group_name| {
+                    self.spec
+                        .asset_groups
+                        .get(group_name)
+                        .cloned()
+                        .inspect(|assets| {
+                            println!("Using group {group_name} with {} assets", assets.len());
+                        })
+                        .unwrap_or(vec![group_name.clone()])
+                })
+                .collect::<Vec<_>>();
+            bnl_list.dedup();
+
+            for aid_to_add in bnl_list {
                 println!("Adding {} to {}", aid_to_add, ctx.bnl_basename);
 
                 let raw_asset = {
-                    if let Some(raw) = ctx.cached_assets.get(aid_to_add) {
+                    if let Some(raw) = ctx.cached_assets.get(&aid_to_add) {
                         raw
                     } else {
                         let new_cached_asset = ctx
@@ -443,11 +461,11 @@ impl Mod {
                                 // TODO: Display errors here properly
                                 let bytes = std::fs::read(path).ok()?;
 
-                                if get_aid_list(&bytes).ok()?.contains(aid_to_add) {
+                                if get_aid_list(&bytes).ok()?.contains(&aid_to_add) {
                                     Some(
                                         BNLFile::from_bytes(&bytes)
                                             .ok()?
-                                            .get_raw_asset(aid_to_add)?
+                                            .get_raw_asset(&aid_to_add)?
                                             .to_owned(),
                                     )
                                 } else {
@@ -458,7 +476,7 @@ impl Mod {
 
                         ctx.cached_assets
                             .insert(aid_to_add.clone(), new_cached_asset);
-                        ctx.cached_assets.get(aid_to_add).unwrap()
+                        ctx.cached_assets.get(&aid_to_add).unwrap()
                     }
                 };
 
