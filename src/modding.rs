@@ -113,6 +113,22 @@ impl Mod {
                 ),
             })?;
 
+        let raw_override_dirs = fs::read_dir(
+            root_dir
+                .iter()
+                .find(|dir| dir.is_dir() && dir.file_name().unwrap_or_default() == "raw_overrides")
+                .ok_or(ModError {
+                    error_type: ModErrorType::SpecificationError,
+                    details: format!(
+                        "Unable to find raw_overrides directory in {}",
+                        mod_dir.as_ref().display()
+                    ),
+                })?,
+        )?
+        .map(|res| res.map(|e| e.path()))
+        .collect::<Result<Vec<_>, io::Error>>()
+        .ok();
+
         let override_dirs = fs::read_dir(
             root_dir
                 .iter()
@@ -128,10 +144,74 @@ impl Mod {
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, io::Error>>()?;
 
-        let re = Regex::new(r"^aid_([a-z0-9]+)_([a-z0-9]+)_([a-z0-9]+)_([a-z0-9_]+)$").unwrap();
+        let re = Regex::new(r"^aid_([a-z0-9]+)_([a-z0-9]+)_([a-z0-9_]+)$").unwrap();
 
         let mut raw_overrides = HashMap::<String, RawAssetOverride>::new();
         let mut cutscene_mods = HashMap::new();
+
+        if let Some(raw_override_dirs) = raw_override_dirs {
+            for raw_override_dir in raw_override_dirs {
+                if !raw_override_dir.is_dir() {
+                    continue;
+                }
+
+                let override_aid = raw_override_dir
+                    .file_name()
+                    .ok_or(ModError {
+                        error_type: ModErrorType::SpecificationError,
+                        details: "Failed to retrieve file name from dir.".to_string(),
+                    })?
+                    .to_str()
+                    .ok_or(ModError {
+                        error_type: ModErrorType::SpecificationError,
+                        details: format!(
+                            "Failed to convert path {} to str.",
+                            raw_override_dir.display()
+                        ),
+                    })?;
+
+                // eg. aid_aidlist_ghoulies_sceneorder_game
+
+                let Some((_, [raw_asset_type, _asset_category, _asset_entry])) =
+                    re.captures(override_aid).map(|caps| caps.extract())
+                else {
+                    return Err(ModError {
+                        error_type: ModErrorType::SpecificationError,
+                        details: format!(
+                            "Asset name {override_aid} did not match AID regex (aid_[TYPE]_[CATEGORY]_[ENTRY]).",
+                        ),
+                    });
+                };
+
+                let asset_type = AssetType::try_from(raw_asset_type).map_err(|_| ModError {
+                    error_type: ModErrorType::SpecificationError,
+                    details: format!(
+                        "Asset type {} does not match any known type.",
+                        raw_asset_type
+                    ),
+                })?;
+
+                let descriptor_bytes = std::fs::read(raw_override_dir.join("descriptor"))?;
+
+                // TODO: Make this read multiple resource chunks
+                let resource_bytes =
+                    std::fs::read(raw_override_dir.join("resource0")).unwrap_or_default();
+
+                if let Some(_existing) = raw_overrides.insert(
+                    override_aid.to_owned(),
+                    RawAssetOverride {
+                        asset_type,
+                        descriptor_bytes,
+                        resource_bytes,
+                    },
+                ) {
+                    return Err(ModError {
+                        error_type: ModErrorType::AssetOverrideError,
+                        details: format!("Asset {override_aid} has already been overwritten."),
+                    });
+                }
+            }
+        }
 
         for override_dir in override_dirs {
             if !override_dir.is_dir() {
@@ -152,7 +232,7 @@ impl Mod {
 
             // eg. aid_aidlist_ghoulies_sceneorder_game
 
-            let Some((_, [raw_asset_type, _asset_category, _asset_group, _asset_entry])) =
+            let Some((_, [raw_asset_type, _asset_category, _asset_entry])) =
                 re.captures(override_aid).map(|caps| caps.extract())
             else {
                 return Err(ModError {
