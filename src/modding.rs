@@ -101,7 +101,7 @@ pub struct Mod {
 }
 
 impl Mod {
-    pub fn new<S: AsRef<str>>(name: S) -> Self {
+    pub fn new(name: impl AsRef<str>) -> Self {
         Self {
             spec: ModSpecification {
                 version: 0,
@@ -115,7 +115,7 @@ impl Mod {
     }
 
     /// Reads a mod on disk from a path
-    pub fn from_dir<P: AsRef<Path>>(mod_dir: P) -> Result<Mod, ModError> {
+    pub fn from_dir(mod_dir: impl AsRef<Path>) -> Result<Mod, ModError> {
         // Locate dirs
         let root_dir = fs::read_dir(&mod_dir)?
             .map(|res| res.map(|e| e.path()))
@@ -151,7 +151,9 @@ impl Mod {
         let override_dirs = fs::read_dir(
             root_dir
                 .iter()
-                .find(|dir| dir.is_dir() && dir.file_name().unwrap_or_default() == "overrides")
+                .find(|dir| {
+                    dir.is_dir() && dir.file_name().unwrap_or_default() == "global_overrides"
+                })
                 .ok_or(ModError {
                     error_type: ModErrorType::SpecificationError,
                     details: format!(
