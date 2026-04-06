@@ -3,7 +3,6 @@ use std::{collections::HashMap, fs, io, path::Path};
 use crate::{
     BNLFile,
     asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType, Parse, aidlist::AidList},
-    get_aid_list,
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -20,6 +19,7 @@ pub struct ModSpecification {
     pub name: String,
     #[serde(default)]
     pub asset_groups: HashMap<String, Vec<String>>,
+    #[serde(default)]
     pub bnl_edits: HashMap<String, BNLMod>,
 }
 
@@ -27,10 +27,10 @@ pub struct ModSpecification {
 pub struct ModContext {
     pub bnl_basename: String,
     pub all_bnl_paths: Vec<std::path::PathBuf>,
-    pub cached_assets: HashMap<String, crate::RawAsset>,
+    pub assets: HashMap<String, crate::RawAsset>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct RawAssetOverride {
     pub asset_type: AssetType,
     pub descriptor_bytes: Vec<u8>,
@@ -95,9 +95,10 @@ pub trait ModLike {
 
 #[derive(Debug)]
 pub struct Mod {
-    spec: ModSpecification,
-    raw_overrides: HashMap<String, RawAssetOverride>,
-    cutscene_mods: HashMap<String, crate::asset::cutscene::CutsceneMod>,
+    pub spec: ModSpecification,
+    /// The assets which came with the mod
+    pub raw_asset_overrides: HashMap<String, RawAssetOverride>,
+    pub cutscene_mods: HashMap<String, crate::asset::cutscene::CutsceneMod>,
 }
 
 impl Mod {
@@ -109,7 +110,7 @@ impl Mod {
                 asset_groups: HashMap::default(),
                 bnl_edits: HashMap::default(),
             },
-            raw_overrides: HashMap::default(),
+            raw_asset_overrides: HashMap::default(),
             cutscene_mods: HashMap::new(),
         }
     }
@@ -130,6 +131,13 @@ impl Mod {
                     "Unable to find root mod.json file in {}",
                     mod_dir.as_ref().display()
                 ),
+            })?;
+
+        // TODO: Clean up this ugly ModError
+        let spec: ModSpecification =
+            serde_json::from_slice(&fs::read(mod_root_file)?).map_err(|e| ModError {
+                error_type: ModErrorType::SpecificationError,
+                details: e.to_string(),
             })?;
 
         let raw_override_dirs = fs::read_dir(
@@ -157,7 +165,7 @@ impl Mod {
                 .ok_or(ModError {
                     error_type: ModErrorType::SpecificationError,
                     details: format!(
-                        "Unable to find overrides directory in {}",
+                        "Unable to find global_overrides directory in {}",
                         mod_dir.as_ref().display()
                     ),
                 })?,
@@ -167,7 +175,7 @@ impl Mod {
 
         let re = Regex::new(r"^aid_([a-z0-9]+)_([a-z0-9]+)_([a-z0-9_]+)$").unwrap();
 
-        let mut raw_overrides = HashMap::<String, RawAssetOverride>::new();
+        let mut raw_asset_overrides = HashMap::<String, RawAssetOverride>::new();
         let mut cutscene_mods = HashMap::new();
 
         if let Some(raw_override_dirs) = raw_override_dirs {
@@ -216,7 +224,7 @@ impl Mod {
                 let resource_bytes =
                     std::fs::read(raw_override_dir.join("resource0")).unwrap_or_default();
 
-                if let Some(_existing) = raw_overrides.insert(
+                if let Some(_existing) = raw_asset_overrides.insert(
                     override_aid.to_owned(),
                     RawAssetOverride {
                         asset_type,
@@ -324,7 +332,7 @@ impl Mod {
             };
 
             if let Some((name, asset_override)) = asset_override
-                && let Some(_existing) = raw_overrides.insert(name, asset_override)
+                && let Some(_existing) = raw_asset_overrides.insert(name, asset_override)
             {
                 return Err(ModError {
                     error_type: ModErrorType::AssetOverrideError,
@@ -333,12 +341,9 @@ impl Mod {
             }
         }
 
-        let spec: ModSpecification =
-            serde_json::from_slice(&fs::read(mod_root_file)?).expect("Failed to deserialize mod.");
-
         Ok(Self {
             spec,
-            raw_overrides,
+            raw_asset_overrides,
             cutscene_mods,
         })
     }
@@ -347,19 +352,24 @@ impl Mod {
         &self.spec
     }
 
-    pub fn overrides(&self) -> &HashMap<String, RawAssetOverride> {
-        &self.raw_overrides
-    }
-
-    pub fn overrides_mut(&mut self) -> &mut HashMap<String, RawAssetOverride> {
-        &mut self.raw_overrides
-    }
-
+    /// List of aids which will be affected by this mod
     pub fn affected_assets(&self) -> Vec<String> {
-        self.raw_overrides
-            .keys()
-            .chain(self.cutscene_mods.keys())
-            .cloned()
+        // For each bnl edit
+        self.spec
+            .bnl_edits
+            .values()
+            .flat_map(|bnl_mod| {
+                // Replace the inline name with the list of aids instead
+                bnl_mod.add.iter().flat_map(|v| {
+                    self.spec
+                        .asset_groups
+                        .get(v)
+                        .cloned()
+                        .unwrap_or_else(|| vec![v.clone()])
+                })
+            })
+            .chain(self.raw_asset_overrides.keys().cloned())
+            .chain(self.cutscene_mods.keys().cloned())
             .collect()
     }
 
@@ -372,39 +382,47 @@ impl Mod {
     ) -> Result<usize, Box<dyn std::error::Error>> {
         let mut overrides_applied = 0usize;
 
-        if !self.overrides().is_empty() {
-            println!(
-                "Applying {} asset override{}.",
-                self.overrides().len(),
-                if self.overrides().len() != 1 { "s" } else { "" }
-            );
+        // Upsert all new assets into the bnl (might not have existed previously)
+        if let Some(bnl_mod) = self.spec.bnl_edits.get(&ctx.bnl_basename) {
+            // For each add in bnl_mod.add, convert it into a list of aids
+            let aids_to_insert = bnl_mod.add.iter().flat_map(|key| {
+                self.spec
+                    .asset_groups
+                    .get(key)
+                    .cloned()
+                    .unwrap_or(vec![key.clone()])
+            });
 
-            for (override_aid, asset_override) in self.overrides() {
-                if let Ok(mut raw_asset) = bnl.remove_asset(override_aid) {
-                    // Get the original asset in the correct type (eg. Cutscene)
-
-                    // Apply the patch to the descriptor
-                    // Re-write the asset
-
-                    let desc_mut = raw_asset.descriptor_bytes_mut();
-                    desc_mut.resize(asset_override.descriptor_bytes.len(), 0u8);
-                    desc_mut.copy_from_slice(&asset_override.descriptor_bytes);
-
-                    // TODO: Resource chunks
-                    /*
-                    let res_mut = raw_asset.resource_chunks_mut() {
-                    }
-                    */
-
-                    overrides_applied += 1;
-
-                    bnl.append_raw_asset(raw_asset);
-                } else {
-                    continue;
-                }
+            for aid in aids_to_insert {
+                bnl.upsert_raw_asset(
+                    ctx.assets
+                        .get(&aid)
+                        .cloned()
+                        .ok_or_else(|| format!("unable to get mod asset {aid}"))?,
+                );
             }
         }
 
+        // Then, apply all available overrides
+        if !ctx.assets.is_empty() {
+            println!(
+                "Applying {} asset override{} to {}",
+                ctx.assets.len(),
+                if ctx.assets.len() != 1 { "s" } else { "" },
+                ctx.bnl_basename,
+            );
+
+            for (override_aid, raw_asset) in &ctx.assets {
+                let Ok(_) = bnl.remove_asset(override_aid) else {
+                    continue;
+                };
+
+                bnl.append_raw_asset(raw_asset.clone());
+                overrides_applied += 1;
+            }
+        }
+
+        /*
         if !self.cutscene_mods.is_empty() {
             for (mod_name, cutscene_mod) in &self.cutscene_mods {
                 if let Err(e) = bnl.modify_asset(
@@ -425,66 +443,7 @@ impl Mod {
                 }
             }
         }
-
-        if let Some((_, bnl_mod)) = self
-            .spec
-            .bnl_edits
-            .iter()
-            .find(|(k, _v)| **k == ctx.bnl_basename)
-        {
-            // Flatten asset_group entries into a giant aid list
-            let mut bnl_list = bnl_mod
-                .add
-                .iter()
-                .flat_map(|group_name| {
-                    self.spec
-                        .asset_groups
-                        .get(group_name)
-                        .cloned()
-                        .inspect(|assets| {
-                            println!("Using group {group_name} with {} assets", assets.len());
-                        })
-                        .unwrap_or(vec![group_name.clone()])
-                })
-                .collect::<Vec<_>>();
-            bnl_list.dedup();
-
-            for aid_to_add in bnl_list {
-                println!("Adding {} to {}", aid_to_add, ctx.bnl_basename);
-
-                let raw_asset = {
-                    if let Some(raw) = ctx.cached_assets.get(&aid_to_add) {
-                        raw
-                    } else {
-                        let new_cached_asset = ctx
-                            .all_bnl_paths
-                            .iter()
-                            .find_map(|path| {
-                                // TODO: Display errors here properly
-                                let bytes = std::fs::read(path).ok()?;
-
-                                if get_aid_list(&bytes).ok()?.contains(&aid_to_add) {
-                                    Some(
-                                        BNLFile::from_bytes(&bytes)
-                                            .ok()?
-                                            .get_raw_asset(&aid_to_add)?
-                                            .to_owned(),
-                                    )
-                                } else {
-                                    None
-                                }
-                            })
-                            .ok_or_else(|| "Unable to get asset".to_string())?;
-
-                        ctx.cached_assets
-                            .insert(aid_to_add.clone(), new_cached_asset);
-                        ctx.cached_assets.get(&aid_to_add).unwrap()
-                    }
-                };
-
-                bnl.upsert_raw_asset(raw_asset.clone());
-            }
-        }
+        */
 
         Ok(overrides_applied)
     }
