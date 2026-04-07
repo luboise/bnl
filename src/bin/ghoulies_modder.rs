@@ -85,6 +85,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     for bnl_path in bnl_paths {
         let bnl_bytes = std::fs::read(&bnl_path)?;
+        let Ok(aid_list) = bnl::get_aid_list(&bnl_bytes) else {
+            continue;
+        };
 
         ctx.bnl_basename = bnl_path
             .file_name()
@@ -92,15 +95,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map(|s| s.to_owned())
             .unwrap();
 
-        let aid_list = bnl::get_aid_list(&bnl_bytes).expect("BAD");
+        if aid_list.iter().all(|aid| !ctx.assets.contains_key(aid))
+            && !modification.spec.bnl_edits.contains_key(&ctx.bnl_basename)
+        {
+            continue;
+        }
 
         let mut bnl = bnl::BNLFile::from_bytes(&bnl_bytes).expect("Stupid bnl error");
 
         let num_applied = modification.apply(&mut ctx, &mut bnl)?;
+
         if num_applied > 0 {
             println!(
                 "Applied {num_applied} modifications to {}",
-                bnl_path.display()
+                bnl_path.display(),
             );
             std::fs::write(bnl_path, bnl.to_bytes())?;
         }

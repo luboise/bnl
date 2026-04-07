@@ -1,4 +1,9 @@
-use std::{collections::HashMap, fs, io, path::Path};
+use std::{
+    collections::HashMap,
+    fs,
+    io::{self},
+    path::Path,
+};
 
 use crate::{
     BNLFile,
@@ -10,6 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BNLMod {
     /// Assets to find and add to this scene
+    #[serde(default)]
     add: Vec<String>,
 }
 
@@ -405,13 +411,6 @@ impl Mod {
 
         // Then, apply all available overrides
         if !ctx.assets.is_empty() {
-            println!(
-                "Applying {} asset override{} to {}",
-                ctx.assets.len(),
-                if ctx.assets.len() != 1 { "s" } else { "" },
-                ctx.bnl_basename,
-            );
-
             for (override_aid, raw_asset) in &ctx.assets {
                 let Ok(_) = bnl.remove_asset(override_aid) else {
                     continue;
