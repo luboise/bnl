@@ -244,6 +244,8 @@ pub enum AssetParseError {
     FileNotFound(String),
 }
 
+impl std::error::Error for AssetParseError {}
+
 impl From<std::io::Error> for AssetParseError {
     fn from(e: std::io::Error) -> Self {
         AssetParseError::InvalidDataViews(

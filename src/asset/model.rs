@@ -1,5 +1,6 @@
 pub mod gltf;
 pub mod nd;
+pub mod sub_colliders;
 pub mod sub_main;
 
 use std::{
@@ -7,7 +8,7 @@ use std::{
     io::{Cursor, Seek, SeekFrom},
 };
 
-use binrw::{BinRead, binrw};
+use binrw::{BinRead, BinReaderExt, binrw};
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -16,7 +17,7 @@ use crate::{
     VirtualResource,
     asset::{
         AssetDescriptor, AssetLike, AssetParseError, AssetType,
-        model::sub_main::ModelSubresource,
+        model::{sub_colliders::CollisionSubresource, sub_main::ModelSubresource},
         texture::{Texture, TextureDescriptor},
     },
 };
@@ -42,7 +43,7 @@ pub enum ModelSubresType {
     Unknown3 = 0x03,
     Unknown4 = 0x04,
     Unknown5 = 0x05,
-    Unknown6 = 0x06,
+    Collision = 0x06,
     Texture = 0x07,
     Unknown8 = 0x08,
     Unknown9 = 0x09,
@@ -99,21 +100,11 @@ pub struct ModelDescriptor {
     flags: u32,
     unknown_u32_1: u32,
     unknown_u32_2: u32,
-    model_subresource: Option<ModelSubresource>,
-    texture_subresource: Vec<TextureDescriptor>,
-    other_subresources: Vec<RawModelSubresource>,
+    pub model_subresource: Option<ModelSubresource>,
+    pub texture_subresource: Vec<TextureDescriptor>,
+    pub collision_subresource: Option<CollisionSubresource>,
+    pub other_subresources: Vec<RawModelSubresource>,
 }
-
-/*
-#[derive(Debug, Clone)]
-pub struct ModelDescriptor {
-    subresources_offset: u32,
-    subresource_count: u32,
-    raw_subresources: Vec<RawModelSubresource>,
-    texture_descriptors: Vec<TextureDescriptor>,
-    mesh_descriptors: Vec<MeshDescriptor>,
-}
-*/
 
 impl ModelDescriptor {
     pub fn model_subresource(&self) -> Option<&ModelSubresource> {
@@ -150,6 +141,7 @@ impl AssetDescriptor for ModelDescriptor {
 
         let mut model_subresource = None;
         let mut texture_subresource = vec![];
+        let mut collision_subresource = None;
         let mut other_subresources = vec![];
 
         for ModelSubresHeader { subres_type, ptr } in footer_entries {
@@ -186,7 +178,34 @@ impl AssetDescriptor for ModelDescriptor {
                         model_subresource = Some(ModelSubresource::from_bytes(&data[ptr..])?);
                     }
                 }
-                _ => {
+                ModelSubresType::Collision => {
+                    let mut cur = Cursor::new(data);
+                    cur.seek(SeekFrom::Start(ptr as u64))?;
+
+                    collision_subresource = Some(
+                        cur.read_le()
+                            .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?,
+                    )
+                }
+                ModelSubresType::Unknown1
+                | ModelSubresType::Unknown2
+                | ModelSubresType::Unknown3
+                | ModelSubresType::Unknown4
+                | ModelSubresType::Unknown5
+                | ModelSubresType::Unknown8
+                | ModelSubresType::Unknown9
+                | ModelSubresType::Unknown10
+                | ModelSubresType::Unknown11
+                | ModelSubresType::Unknown12
+                | ModelSubresType::Unknown13
+                | ModelSubresType::Unknown14
+                | ModelSubresType::Unknown15
+                | ModelSubresType::Unknown16
+                | ModelSubresType::Unknown17
+                | ModelSubresType::Unknown18
+                | ModelSubresType::Unknown19
+                | ModelSubresType::Unknown20
+                | ModelSubresType::Unknown21 => {
                     other_subresources.push(RawModelSubresource {
                         subres_type,
                         subres_param: ptr,
@@ -202,6 +221,7 @@ impl AssetDescriptor for ModelDescriptor {
             model_subresource,
             other_subresources,
             texture_subresource,
+            collision_subresource,
         })
     }
 

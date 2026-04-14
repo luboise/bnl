@@ -6,9 +6,17 @@ use std::{
 
 use crate::asset::model::nd::{ModelReadContext, ModelSlice, Nd};
 
-#[derive(Debug)]
+#[derive(Debug, strum::Display)]
 pub enum SubresourceError {
     CreationError,
+}
+
+impl std::error::Error for SubresourceError {}
+
+impl From<io::Error> for SubresourceError {
+    fn from(_: io::Error) -> Self {
+        Self::CreationError
+    }
 }
 
 const MESH_HEADER_SIZE: usize = 40;
@@ -86,12 +94,6 @@ pub struct ModelSubresource {
     pub(crate) key_value_map: HashMap<String, Vec<u8>>,
 }
 
-impl From<io::Error> for SubresourceError {
-    fn from(_: io::Error) -> Self {
-        Self::CreationError
-    }
-}
-
 impl ModelSubresource {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, SubresourceError> {
         let mut cur = Cursor::new(bytes);
@@ -131,7 +133,7 @@ impl ModelSubresource {
             if num_values > 0 && data_start_ptr != 0 {
                 cur.seek(SeekFrom::Start(data_start_ptr.into()))?;
 
-                for i in 0..num_values as usize {
+                for _ in 0..num_values as usize {
                     let key_ptr = cur.read_u32::<LittleEndian>()?;
                     let value_ptr = cur.read_u32::<LittleEndian>()?;
                     let value_size = cur.read_u32::<LittleEndian>()?;
