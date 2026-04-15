@@ -19,6 +19,106 @@ pub struct CollisionSubresource {
     vertices: Vec<[f32; 3]>,
 }
 
+impl CollisionSubresource {
+    pub fn add_to_gltf(
+        &self,
+        gltf: &mut gltf_writer::gltf::Gltf,
+    ) -> Result<(), gltf_writer::gltf::GltfError> {
+        let vertices_accessor = {
+            let vertex_bytes = self
+                .vertices
+                .iter()
+                .flatten()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>();
+            let vertex_buffer_len = vertex_bytes.len();
+            let vertex_buffer_index =
+                gltf.add_buffer(gltf_writer::gltf::Buffer::new(&vertex_bytes));
+            let vertex_buffer_view = gltf.add_buffer_view(gltf_writer::gltf::BufferView::new(
+                vertex_buffer_index,
+                0,
+                vertex_buffer_len,
+                None,
+                None,
+            ));
+
+            gltf.add_accessor(gltf_writer::gltf::Accessor::new(
+                vertex_buffer_view,
+                0,
+                gltf_writer::gltf::AccessorDataType::F32,
+                vertex_buffer_len / 12,
+                gltf_writer::gltf::AccessorComponentCount::VEC3,
+            ))
+        };
+
+        let indices: Vec<u32> = self
+            .bodies
+            .iter()
+            .flat_map(|body| match body {
+                CollisionBody::Mesh { primitives, .. } => primitives.iter().flat_map(|primitive| {
+                    primitive
+                        .triangles
+                        .iter()
+                        .flat_map(|triangle| [triangle.index1, triangle.index2, triangle.index3])
+                }),
+            })
+            .collect();
+
+        let indices_accessor = {
+            let bi = gltf.add_buffer(gltf_writer::gltf::Buffer::new(
+                indices
+                    .clone()
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            ));
+
+            let bvi = gltf.add_buffer_view(gltf_writer::gltf::BufferView::new(
+                bi,
+                0,
+                indices.len() * size_of::<u32>(),
+                None,
+                None,
+            ));
+
+            gltf.add_accessor(gltf_writer::gltf::Accessor::new(
+                bvi,
+                0,
+                gltf_writer::gltf::AccessorDataType::U32,
+                indices.len(),
+                gltf_writer::gltf::AccessorComponentCount::SCALAR,
+            ))
+        };
+
+        let mesh_index = {
+            let mut new_mesh = gltf_writer::gltf::Mesh::new("Mesh".to_owned());
+
+            let mut attributes = std::collections::HashMap::default();
+
+            attributes.insert(
+                gltf_writer::gltf::VertexAttribute::Position,
+                vertices_accessor,
+            );
+
+            new_mesh.add_primitive(gltf_writer::gltf::Primitive {
+                indices_accessor: Some(indices_accessor),
+                topology_type: None,
+                attributes,
+                material: None,
+            });
+
+            gltf.add_mesh(new_mesh)
+        };
+
+        let mut new_node = gltf_writer::gltf::Node::new(Some("CollisionShape".to_owned()));
+        new_node.set_mesh_index(Some(mesh_index));
+
+        gltf.add_node(new_node);
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 #[binrw::binrw]
 #[br(repr = u8)]
