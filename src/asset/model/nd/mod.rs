@@ -25,7 +25,7 @@ pub(crate) mod prelude {
 }
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     io::{self},
     iter::{self},
 };
@@ -500,16 +500,30 @@ pub struct Nd {
 }
 
 struct NdIterator<'a> {
-    base_nd: &'a Nd,
-    current_nd: Option<&'a Nd>,
+    stack: VecDeque<&'a Nd>,
+}
+
+fn add_to_stack<'a>(node: &'a Nd, stack: &mut VecDeque<&'a Nd>) {
+    stack.push_back(node);
+
+    if let Some(child) = &node.first_child {
+        add_to_stack(child, stack);
+    }
+
+    if let Some(sibling) = &node.next_sibling {
+        add_to_stack(sibling, stack);
+    }
 }
 
 impl<'a> NdIterator<'a> {
     pub fn new(nd: &'a Nd) -> Self {
-        Self {
-            base_nd: nd,
-            current_nd: Some(nd),
-        }
+        let stack = {
+            let mut stack = VecDeque::new();
+            add_to_stack(nd, &mut stack);
+            stack
+        };
+
+        Self { stack }
     }
 }
 
@@ -517,21 +531,7 @@ impl<'a> Iterator for NdIterator<'a> {
     type Item = &'a Nd;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // If sibling
-        if let Some(x) = self.current_nd.and_then(|nd| nd.next_sibling.as_deref()) {
-            self.current_nd = Some(x);
-            return Some(x);
-        }
-
-        // If child
-        if let Some(child) = self.base_nd.first_child() {
-            self.current_nd = Some(child);
-            self.base_nd = child;
-
-            return Some(child);
-        }
-
-        unreachable!()
+        self.stack.pop_front()
     }
 }
 
