@@ -1,4 +1,4 @@
-pub(crate) mod d3d;
+pub mod d3d;
 pub use d3d::{D3DFormat, D3DPrimitiveType};
 
 pub(crate) mod images;
