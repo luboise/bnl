@@ -182,10 +182,16 @@ impl AssetDescriptor for ModelDescriptor {
                     let mut cur = Cursor::new(data);
                     cur.seek(SeekFrom::Start(ptr as u64))?;
 
-                    collision_subresource = Some(
-                        cur.read_le()
-                            .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?,
-                    )
+                    collision_subresource = match cur
+                        .read_le()
+                        .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))
+                    {
+                        Ok(subres) => Some(subres),
+                        Err(e) => {
+                            eprintln!("error parsing model collision subres: {e}");
+                            None
+                        }
+                    };
                 }
                 ModelSubresType::Unknown1
                 | ModelSubresType::Unknown2
