@@ -16,14 +16,14 @@ const TEXTURE_DESCRIPTOR_SIZE: usize = 28;
 
 #[derive(Debug, Clone)]
 pub struct TextureDescriptor {
-    format: D3DFormat,
-    header_size: u32, // 0x1c
-    width: u16,
-    height: u16,
-    flags: u32, // 0x00000001
-    unknown_3a: u32,
-    texture_offset: u32,
-    texture_size: u32,
+    pub(crate) format: D3DFormat,
+    pub(crate) header_size: u32, // 0x1c
+    pub(crate) width: u16,
+    pub(crate) height: u16,
+    pub(crate) flags: u32, // 0x00000001
+    pub(crate) unknown_3a: u32,
+    pub(crate) texture_offset: u32,
+    pub(crate) texture_size: u32,
 }
 
 impl TextureDescriptor {
@@ -229,7 +229,7 @@ impl AssetDescriptor for TextureDescriptor {
 
         let mut cur = Cursor::new(&mut bytes[..]);
 
-        cur.write_u32::<LittleEndian>(self.format().into())?;
+        cur.write_u32::<LittleEndian>(self.format.into())?;
 
         cur.write_u32::<LittleEndian>(self.header_size)?;
         cur.write_u16::<LittleEndian>(self.width)?;

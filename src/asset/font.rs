@@ -155,8 +155,8 @@ impl crate::asset::AssetLike for Font {
             .glyphs
             .iter()
             .map(|raw| {
-                let tex_start = raw.texture_descriptor.texture_offset() as usize;
-                let tex_size = raw.texture_descriptor.texture_size() as usize;
+                let tex_start = raw.texture_descriptor.texture_offset as usize;
+                let tex_size = raw.texture_descriptor.texture_size as usize;
 
                 let textures = (0..descriptor.num_variants as usize)
                     .map(|i| {

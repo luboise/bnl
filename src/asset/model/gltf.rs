@@ -117,8 +117,8 @@ impl AssetLike for GLTFModel {
         for (i, tex_desc) in descriptor.texture_subresource.iter().enumerate() {
             let image_bytes = virtual_res
                 .get_bytes(
-                    tex_desc.texture_offset() as usize,
-                    tex_desc.texture_size() as usize,
+                    tex_desc.texture_offset as usize,
+                    tex_desc.texture_size as usize,
                 )
                 .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
