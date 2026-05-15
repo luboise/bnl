@@ -16,14 +16,14 @@ const TEXTURE_DESCRIPTOR_SIZE: usize = 28;
 
 #[derive(Debug, Clone)]
 pub struct TextureDescriptor {
-    pub(crate) format: D3DFormat,
-    pub(crate) header_size: u32, // 0x1c
-    pub(crate) width: u16,
-    pub(crate) height: u16,
-    pub(crate) flags: u32, // 0x00000001
-    pub(crate) unknown_3a: u32,
-    pub(crate) texture_offset: u32,
-    pub(crate) texture_size: u32,
+    pub format: D3DFormat,
+    pub header_size: u32, // 0x1c
+    pub width: u16,
+    pub height: u16,
+    pub flags: u32, // 0x00000001
+    pub unknown_3a: u32,
+    pub texture_offset: u32,
+    pub texture_size: u32,
 }
 
 impl TextureDescriptor {
@@ -95,8 +95,8 @@ pub enum TextureError {
 
 #[derive(Clone)]
 pub struct Texture {
-    descriptor: TextureDescriptor,
-    bytes: Vec<u8>,
+    pub descriptor: TextureDescriptor,
+    pub bytes: Vec<u8>,
 }
 
 impl std::fmt::Debug for Texture {

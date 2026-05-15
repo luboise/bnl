@@ -35,7 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .to_owned();
 
                     *raw_asset.descriptor_bytes_mut() = raw_override.descriptor_bytes.clone();
-                    // TODO: Resource chunks
+                    *raw_asset.resource_chunks_mut() =
+                        Some(vec![raw_override.resource_bytes.clone()]);
 
                     Some(raw_asset)
                 } else {

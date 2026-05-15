@@ -226,9 +226,14 @@ impl Mod {
 
                 let descriptor_bytes = std::fs::read(raw_override_dir.join("descriptor"))?;
 
-                // TODO: Make this read multiple resource chunks
-                let resource_bytes =
-                    std::fs::read(raw_override_dir.join("resource0")).unwrap_or_default();
+                let resource_bytes = {
+                    if let Ok(res) = std::fs::read(raw_override_dir.join("resource")) {
+                        res
+                    } else {
+                        // TODO: Make this read multiple resource chunks
+                        std::fs::read(raw_override_dir.join("resource0")).unwrap_or_default()
+                    }
+                };
 
                 if let Some(_existing) = raw_asset_overrides.insert(
                     override_aid.to_owned(),
