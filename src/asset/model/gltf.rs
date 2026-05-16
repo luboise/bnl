@@ -36,7 +36,7 @@ impl GLTFModel {
 }
 
 impl Dump for GLTFModel {
-    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), Box<dyn std::error::Error>> {
         let export_path = path::absolute(dump_path.as_ref())?;
 
         self.gltf
@@ -123,7 +123,9 @@ impl AssetLike for GLTFModel {
                 .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
 
             let tex = Texture::new(tex_desc.clone(), image_bytes);
-            let rgba_image = tex.to_rgba_image()?;
+            let rgba_image = tex
+                .to_rgba_image()
+                .map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
 
             let mut png = vec![];
             rgba_image

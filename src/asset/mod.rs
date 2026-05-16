@@ -308,7 +308,7 @@ pub trait DumpToDir: Dump {
 }
 
 pub trait Dump {
-    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error>;
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), Box<dyn std::error::Error>>;
 }
 
 /// Parses a naturally serialised version of an asset. This is NOT used with descriptors, but

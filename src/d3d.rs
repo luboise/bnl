@@ -223,26 +223,24 @@ impl PixelBits for StandardFormat {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u32)]
 pub enum D3DFormat {
-    Swizzled(Swizzled),
-    Luminance(LinearLuminance),
-    Standard(StandardFormat),
-    Linear(LinearColour),
-
-    VertexData = 100,
-    Index16 = 101,
-    ForceDWORD = 0x7fffffff,
+    DXT1 = 0x0c,
+    DXT2_3 = 0x0e,
+    DXT4_5 = 0x0F,
+    ARGB8 = 0x12,
+    RGBA8 = 0x3c,
 }
 
-impl From<D3DFormat> for u32 {
-    fn from(value: D3DFormat) -> Self {
+impl TryFrom<u32> for D3DFormat {
+    type Error = &'static str;
+
+    fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-            D3DFormat::Swizzled(v) => v.into(),
-            D3DFormat::Luminance(v) => v.into(),
-            D3DFormat::Standard(v) => v.into(),
-            D3DFormat::Linear(v) => v.into(),
-            D3DFormat::VertexData => 100,
-            D3DFormat::Index16 => 101,
-            D3DFormat::ForceDWORD => 0x7fffffff,
+            0x0c => Ok(Self::DXT1),
+            0x0e => Ok(Self::DXT2_3),
+            0x0f => Ok(Self::DXT4_5),
+            0x12 => Ok(Self::ARGB8),
+            0x3c => Ok(Self::RGBA8),
+            _ => Err("unrecognised D3DFormat"),
         }
     }
 }
@@ -250,13 +248,10 @@ impl From<D3DFormat> for u32 {
 impl PixelBits for D3DFormat {
     fn bits_per_pixel(&self) -> BitCount {
         match self {
-            D3DFormat::Swizzled(format) => format.bits_per_pixel(),
-            D3DFormat::Linear(format) => format.bits_per_pixel(),
-            D3DFormat::Standard(format) => format.bits_per_pixel(),
-            D3DFormat::Luminance(format) => format.bits_per_pixel(),
-            D3DFormat::Index16 => 16, // 16 bits per index
-            D3DFormat::VertexData => 0,
-            D3DFormat::ForceDWORD => 0,
+            D3DFormat::DXT1 => 4,
+            D3DFormat::DXT2_3 => 8,
+            D3DFormat::DXT4_5 => 8,
+            D3DFormat::ARGB8 | D3DFormat::RGBA8 => 32,
         }
     }
 }

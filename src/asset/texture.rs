@@ -9,7 +9,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use crate::{
     VirtualResource, VirtualResourceError,
     asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType, Dump},
-    d3d::{D3DFormat, LinearColour, PixelBits, StandardFormat, Swizzled},
+    d3d::{D3DFormat, PixelBits},
 };
 
 const TEXTURE_DESCRIPTOR_SIZE: usize = 28;
@@ -116,34 +116,17 @@ impl Texture {
         }
     }
 
-    pub fn to_rgba_image(&self) -> Result<RGBAImage, std::io::Error> {
-        let mut bytes: Vec<u8> = self.bytes.clone();
-
-        let desired_format: D3DFormat = match self.descriptor.format {
-            D3DFormat::Linear(LinearColour::R8G8B8A8)
-            | D3DFormat::Swizzled(Swizzled::A8B8G8R8)
-            | D3DFormat::Swizzled(Swizzled::A8R8G8B8) => D3DFormat::Linear(LinearColour::R8G8B8A8),
-            _ => D3DFormat::Linear(LinearColour::R8G8B8A8),
-        };
-
-        if desired_format != self.descriptor.format {
-            println!("Attempting transcode.");
-
-            bytes = crate::images::transcode(
-                self.descriptor.width.into(),
-                self.descriptor.height.into(),
-                self.descriptor.format,
-                desired_format,
-                bytes.as_ref(),
-            )?;
-
-            println!("Transcode succeeded.");
-        }
-
+    pub fn to_rgba_image(&self) -> Result<RGBAImage, Box<dyn std::error::Error>> {
         Ok(RGBAImage {
             width: self.descriptor.width as usize,
             height: self.descriptor.height as usize,
-            bytes,
+            bytes: crate::transcode_image(
+                self.descriptor.width.try_into()?,
+                self.descriptor.height.try_into()?,
+                self.descriptor.format,
+                D3DFormat::RGBA8,
+                &self.bytes,
+            )?,
         })
     }
 
@@ -158,7 +141,7 @@ impl Texture {
 
 impl Dump for Texture {
     // fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
-    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), Box<dyn std::error::Error>> {
         let path = dump_path.as_ref();
 
         let file = File::create(path)?;
@@ -180,21 +163,17 @@ impl AssetDescriptor for TextureDescriptor {
 
         let mut cur = Cursor::new(data);
 
-        let format = match cur.read_u32::<LittleEndian>()? {
-            0x00000012 => D3DFormat::Swizzled(Swizzled::B8G8R8A8),
-            0x0000003f => D3DFormat::Swizzled(Swizzled::A8B8G8R8),
-            0x00000040 => D3DFormat::Linear(LinearColour::A8R8G8B8),
-            0x0000000c => D3DFormat::Standard(StandardFormat::DXT1),
-            0x0000000e => D3DFormat::Standard(StandardFormat::DXT2Or3),
-            0x0000000f => D3DFormat::Standard(StandardFormat::DXT4Or5),
-            unknown_format => {
-                println!(
-                    "Unimplemented format found {}. Assuming A8B8G8R8.",
-                    unknown_format
-                );
-                D3DFormat::Linear(LinearColour::A8R8G8B8)
-            }
-        };
+        let format = {
+            let format_u32 = cur.read_u32::<LittleEndian>()?;
+
+            D3DFormat::try_from(format_u32).map_err(|_| {
+                eprintln!("unimplemented d3d format: 0x{format_u32:x}");
+                AssetParseError::ErrorParsingDescriptor
+            })
+        }?;
+
+        // println!(
+        //          );
 
         let header_size = cur.read_u32::<LittleEndian>()?;
         let width = cur.read_u16::<LittleEndian>()?;
@@ -229,7 +208,7 @@ impl AssetDescriptor for TextureDescriptor {
 
         let mut cur = Cursor::new(&mut bytes[..]);
 
-        cur.write_u32::<LittleEndian>(self.format.into())?;
+        cur.write_u32::<LittleEndian>(self.format as u32)?;
 
         cur.write_u32::<LittleEndian>(self.header_size)?;
         cur.write_u16::<LittleEndian>(self.width)?;
@@ -362,7 +341,7 @@ impl Texture {
         let transcoded = crate::images::transcode(
             self.descriptor().width as usize,
             self.descriptor().height as usize,
-            D3DFormat::Swizzled(Swizzled::R8G8B8A8),
+            D3DFormat::RGBA8,
             self.descriptor().format,
             data,
         )
@@ -405,7 +384,7 @@ mod tests {
         ];
 
         let tex_desc = TextureDescriptor::from_bytes(&data).unwrap();
-        assert_eq!(tex_desc.format, D3DFormat::Standard(StandardFormat::DXT1));
+        assert_eq!(tex_desc.format, D3DFormat::DXT1);
         assert_eq!(tex_desc.header_size, 0x1c);
         assert_eq!(tex_desc.width, 0x80);
         assert_eq!(tex_desc.height, 0x80);
@@ -427,7 +406,7 @@ mod tests {
         ];
 
         let tex_desc = TextureDescriptor::from_bytes(&data).unwrap();
-        assert_eq!(tex_desc.format, D3DFormat::Standard(StandardFormat::DXT1));
+        assert_eq!(tex_desc.format, D3DFormat::DXT1);
         assert_eq!(tex_desc.header_size, 0x1c);
         assert_eq!(tex_desc.width, 0x80);
         assert_eq!(tex_desc.height, 0x80);

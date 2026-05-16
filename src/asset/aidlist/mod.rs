@@ -128,7 +128,7 @@ impl AssetLike for AidList {
 }
 
 impl Dump for AidList {
-    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), std::io::Error> {
+    fn dump<P: AsRef<Path>>(&self, dump_path: P) -> Result<(), Box<dyn std::error::Error>> {
         {
             let out_file = File::create(dump_path)?;
 

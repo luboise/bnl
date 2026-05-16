@@ -2,6 +2,7 @@ pub mod d3d;
 pub use d3d::{D3DFormat, D3DPrimitiveType};
 
 pub(crate) mod images;
+pub use images::transcode as transcode_image;
 
 pub mod utils;
 

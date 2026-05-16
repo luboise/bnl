@@ -540,6 +540,7 @@ impl TexturesSubresource {
         resource_base: u32,
         alignment: usize,
     ) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
+        println!("serializing texture subres");
         let mut descriptor_bytes = vec![0u8; alignment];
         let mut resource_bytes = vec![];
 
@@ -582,13 +583,14 @@ impl TexturesSubresource {
             resource_bytes.extend_from_slice(texture.bytes());
             let mut bytes = descriptor.to_bytes()?;
 
-            // TODO: Make this nicer
-            while bytes.len() < 0x40 {
-                bytes.push(0u8);
+            if bytes.len() < 40 {
+                bytes.resize(40, 0u8);
             }
 
-            descriptor_bytes.extend_from_slice(&bytes)
+            descriptor_bytes.extend_from_slice(&bytes);
         }
+
+        println!("done serializing texture subres");
 
         Ok((descriptor_bytes, resource_bytes))
     }
