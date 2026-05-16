@@ -106,8 +106,26 @@ pub fn transcode(
 
                 Ok(out_bytes)
             }
-            D3DFormat::ARGB8 => todo!(),
-            D3DFormat::RGBA8 => todo!(),
+            D3DFormat::ARGB8 => {
+                // RGBA8 -> ARGB8
+                Ok(bytes
+                    .chunks_exact(4)
+                    .flat_map(|chunk| {
+                        let (r, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
+                        [a, r, g, b]
+                    })
+                    .collect::<Vec<_>>())
+            }
+            D3DFormat::RGBA8 => {
+                // ARGB8 -> RGBA8
+                Ok(bytes
+                    .chunks_exact(4)
+                    .flat_map(|chunk| {
+                        let (a, r, g, b) = (chunk[0], chunk[1], chunk[2], chunk[3]);
+                        [r, g, b, a]
+                    })
+                    .collect::<Vec<_>>())
+            }
         },
     }
 }
