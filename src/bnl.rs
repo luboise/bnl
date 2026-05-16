@@ -224,9 +224,9 @@ impl AssetMetadata {
 
 #[derive(Debug, Clone)]
 pub struct RawAsset {
-    metadata: AssetMetadata,
-    descriptor_bytes: Vec<u8>,
-    resource_chunks: Option<Vec<Vec<u8>>>,
+    pub metadata: AssetMetadata,
+    pub descriptor_bytes: Vec<u8>,
+    pub resource_chunks: Option<Vec<Vec<u8>>>,
 }
 
 impl RawAsset {
@@ -303,6 +303,13 @@ impl RawAsset {
             descriptor_bytes,
             resource_chunks,
         })
+    }
+
+    /// Combines the resource chunks into a single Vec and returns them
+    pub fn resource(&self) -> Option<Vec<u8>> {
+        self.resource_chunks
+            .clone()
+            .map(|v| v.into_iter().flatten().collect())
     }
 
     pub fn name(&self) -> &str {

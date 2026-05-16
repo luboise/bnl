@@ -30,6 +30,7 @@ regex = "1.12.2"
 binrw = "0.15.1"
 strum = { version = "0.28.0", features = ["derive"] }
 jkl = "0.2.1"
+image = "0.25.10"
 
 [lib]
 name = "bnl"

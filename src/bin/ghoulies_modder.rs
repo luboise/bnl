@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use bnl::modding::ModLike;
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -76,6 +78,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assets.insert(aid, found_asset);
     }
 
+    for (_aid, _asset) in assets
+        .iter_mut()
+        .filter(|(aid, _)| modification.cutscene_mods.contains_key(*aid))
+    {
+        todo!("cutscene mod apply not implemented (BUG ME ABOUT THIS)");
+        // Apply the cutscene mod
+    }
+
+    for (aid, raw_asset) in assets
+        .iter_mut()
+        .filter(|(aid, _)| modification.model_mods.contains_key(*aid))
+    {
+        let model_mod = modification.model_mods.get(aid).unwrap();
+        model_mod.apply_raw(raw_asset)?;
+    }
+
     let mut ctx = bnl::modding::ModContext {
         bnl_basename: String::default(),
         all_bnl_paths: vec![],
@@ -117,27 +135,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
-/*
- let new_cached_asset = ctx
-                            .all_bnl_paths
-                            .iter()
-                            .find_map(|path| {
-                                // TODO: Display errors here properly
-                                let bytes = std::fs::read(path).ok()?;
-
-                                if get_aid_list(&bytes).ok()?.contains(&aid_to_add) {
-                                    Some(
-                                        BNLFile::from_bytes(&bytes)
-                                            .ok()?
-                                            .get_raw_asset(&aid_to_add)?
-                                            .to_owned(),
-                                    )
-                                } else {
-                                    None
-                                }
-                            })
-                            .ok_or_else(|| "Unable to get asset".to_string())?;
-
-                        ctx.assets.insert(aid_to_add.clone(), new_cached_asset);
-                        ctx.assets.get(&aid_to_add).unwrap()
-*/

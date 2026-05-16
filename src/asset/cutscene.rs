@@ -83,20 +83,3 @@ impl super::AssetLike for Cutscene {
         None
     }
 }
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct CutsceneMod {
-    pub length: Option<f32>,
-}
-
-impl crate::modding::ModLike for CutsceneMod {
-    type Descriptor = CutsceneDescriptor;
-
-    fn apply(&self, descriptor: &mut Self::Descriptor) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(length) = self.length {
-            descriptor.length = length;
-        }
-
-        Ok(())
-    }
-}

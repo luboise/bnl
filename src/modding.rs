@@ -7,7 +7,10 @@ use std::{
 
 use crate::{
     BNLFile,
-    asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType, Parse, aidlist::AidList},
+    asset::{
+        AssetDescriptor, AssetLike, AssetParseError, AssetType, Dump, Parse, aidlist::AidList,
+        model::TexturedModel,
+    },
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -94,9 +97,33 @@ impl From<AssetParseError> for ModError {
     }
 }
 
-pub trait ModLike {
+pub trait ModLike: Sized {
     type Descriptor: AssetDescriptor;
-    fn apply(&self, descriptor: &mut Self::Descriptor) -> Result<(), Box<dyn std::error::Error>>;
+
+    fn apply_raw(&self, raw_asset: &mut crate::RawAsset) -> Result<(), Box<dyn std::error::Error>> {
+        let mut desc = Self::Descriptor::from_bytes(raw_asset.descriptor_bytes())?;
+
+        let mut resource = raw_asset.resource().unwrap_or_default();
+
+        self.apply(&mut desc, &mut resource)?;
+
+        raw_asset.descriptor_bytes = desc.to_bytes()?;
+        raw_asset.resource_chunks = if resource.is_empty() {
+            None
+        } else {
+            Some(vec![resource])
+        };
+
+        Ok(())
+    }
+
+    fn apply(
+        &self,
+        descriptor: &mut Self::Descriptor,
+        resource: &mut Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error>>;
+
+    fn from_dir(dir: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>>;
 }
 
 #[derive(Debug)]
@@ -104,7 +131,8 @@ pub struct Mod {
     pub spec: ModSpecification,
     /// The assets which came with the mod
     pub raw_asset_overrides: HashMap<String, RawAssetOverride>,
-    pub cutscene_mods: HashMap<String, crate::asset::cutscene::CutsceneMod>,
+    pub cutscene_mods: HashMap<String, CutsceneMod>,
+    pub model_mods: HashMap<String, ModelMod>,
 }
 
 impl Mod {
@@ -118,6 +146,7 @@ impl Mod {
             },
             raw_asset_overrides: HashMap::default(),
             cutscene_mods: HashMap::new(),
+            model_mods: HashMap::new(),
         }
     }
 
@@ -183,6 +212,7 @@ impl Mod {
 
         let mut raw_asset_overrides = HashMap::<String, RawAssetOverride>::new();
         let mut cutscene_mods = HashMap::new();
+        let mut model_mods = HashMap::new();
 
         if let Some(raw_override_dirs) = raw_override_dirs {
             for raw_override_dir in raw_override_dirs {
@@ -302,14 +332,24 @@ impl Mod {
                     ))
                 }
                 AssetType::ResCutscene => {
-                    if let Some(cutscene_mod) =
-                        std::fs::File::open(override_dir.join("override.json"))
-                            .ok()
-                            .and_then(|v| serde_json::from_reader(v).ok())
-                    {
-                        cutscene_mods.insert(override_aid.to_string(), cutscene_mod);
-                    }
+                    cutscene_mods.insert(
+                        override_aid.to_string(),
+                        CutsceneMod::from_dir(&override_dir).map_err(|e| ModError {
+                            error_type: ModErrorType::AssetOverrideError,
+                            details: e.to_string(),
+                        })?,
+                    );
 
+                    None
+                }
+                AssetType::ResModel => {
+                    model_mods.insert(
+                        override_aid.to_string(),
+                        ModelMod::from_dir(&override_dir).map_err(|e| ModError {
+                            error_type: ModErrorType::AssetOverrideError,
+                            details: e.to_string(),
+                        })?,
+                    );
                     None
                 }
                 _ => None, //
@@ -356,6 +396,7 @@ impl Mod {
             spec,
             raw_asset_overrides,
             cutscene_mods,
+            model_mods,
         })
     }
 
@@ -381,6 +422,7 @@ impl Mod {
             })
             .chain(self.raw_asset_overrides.keys().cloned())
             .chain(self.cutscene_mods.keys().cloned())
+            .chain(self.model_mods.keys().cloned())
             .collect()
     }
 
@@ -426,29 +468,115 @@ impl Mod {
             }
         }
 
-        /*
-        if !self.cutscene_mods.is_empty() {
-            for (mod_name, cutscene_mod) in &self.cutscene_mods {
-                if let Err(e) = bnl.modify_asset(
-                    mod_name,
-                    |cutscene: &mut crate::asset::Asset<crate::asset::cutscene::Cutscene>| {
-                        if let Some(length) = cutscene_mod.length {
-                            cutscene.asset_mut().descriptor.length = length
-                        }
-
-                        overrides_applied += 1;
-                        Ok(())
-                    },
-                ) {
-                    match e {
-                        crate::asset::AssetError::NotFound => (),
-                        _ => eprintln!("Failed to apply cutscene mod: {e}"),
-                    };
-                }
-            }
-        }
-        */
-
         Ok(overrides_applied)
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct CutsceneMod {
+    pub length: Option<f32>,
+}
+
+impl crate::modding::ModLike for CutsceneMod {
+    type Descriptor = crate::asset::cutscene::CutsceneDescriptor;
+
+    fn apply(
+        &self,
+        descriptor: &mut Self::Descriptor,
+        _resource: &mut Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(length) = self.length {
+            descriptor.length = length;
+        }
+
+        Ok(())
+    }
+
+    fn from_dir(dir: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        let f = std::fs::File::open(dir.as_ref().join("override.json"))?;
+        Ok(serde_json::from_reader(f)?)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelMod {
+    textures: HashMap<u32, crate::asset::texture::Texture>,
+}
+
+impl crate::modding::ModLike for ModelMod {
+    type Descriptor = crate::asset::model::ModelDescriptor;
+
+    fn apply(
+        &self,
+        _descriptor: &mut Self::Descriptor,
+        _resource: &mut Vec<u8>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        todo!("ModelMod::apply unimplemented, use apply_raw");
+    }
+
+    fn apply_raw(&self, raw_asset: &mut crate::RawAsset) -> Result<(), Box<dyn std::error::Error>> {
+        let mut tm = TexturedModel::new(
+            &raw_asset.descriptor_bytes,
+            &raw_asset
+                .resource()
+                .ok_or("texture has no resource".to_owned())?,
+        )?;
+
+        for (index, new_texture) in &self.textures {
+            let existing_tex = tm
+                .textures_subresource
+                .textures
+                .get_mut(usize::try_from(*index)?)
+                .ok_or_else(|| format!("no texture for index {index}"))?;
+
+            existing_tex.override_from(new_texture, false)?;
+        }
+
+        let (desc, res) = tm.serialize()?;
+
+        raw_asset.descriptor_bytes = desc;
+        raw_asset.resource_chunks = Some(vec![res]);
+
+        Ok(())
+    }
+
+    fn from_dir(dir: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        let texture_regex = regex::Regex::new(r"^texturefile([0-9]+).*$")?;
+
+        const FILE_EXTENSIONS: [&str; 1] = ["png"];
+
+        let dir = dir.as_ref();
+
+        let mut textures = HashMap::new();
+
+        for entry in walkdir::WalkDir::new(dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let Some(file_name_str) = entry.file_name().to_str() else {
+                continue;
+            };
+            let Some(extension) = entry.path().extension().and_then(|v| v.to_str()) else {
+                continue;
+            };
+
+            let Some((_, [index])) = texture_regex
+                .captures(file_name_str)
+                .map(|caps| caps.extract())
+            else {
+                continue;
+            };
+
+            if !file_name_str.starts_with("texturefile") || !FILE_EXTENSIONS.contains(&extension) {
+                continue;
+            }
+
+            textures.insert(
+                index.parse()?,
+                crate::asset::texture::Texture::from_path(entry.path())?,
+            );
+        }
+
+        Ok(Self { textures })
     }
 }

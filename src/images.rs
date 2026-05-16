@@ -37,8 +37,12 @@ pub fn transcode(
         },
         D3DFormat::RGBA8 | D3DFormat::ARGB8 => match dst_format {
             D3DFormat::DXT1 | D3DFormat::DXT2_3 | D3DFormat::DXT4_5 => {
+                if src_format == D3DFormat::ARGB8 {
+                    panic!("argb8 to ext1 not implemented");
+                }
+
                 if dst_format == D3DFormat::ARGB8 {
-                    panic!("argb8 not implemented");
+                    panic!("rgba8 to dxt1-5 not implemented");
                 }
                 /*
                 let no_alpha = if src_format == D3DFormat::RGBA8 {
@@ -66,27 +70,27 @@ pub fn transcode(
                         .unwrap_or(jkl::math::Rgb32F::new(0.0, 0.0, 0.0))
                 };
 
-                for y in 0..height / 4 {
-                    for x in 0..width / 4 {
-                        let x0y0 = get_pixel(x * 4, y * 4);
-                        let x0y1 = get_pixel(x * 4, y * 4 + 1);
-                        let x0y2 = get_pixel(x * 4, y * 4 + 2);
-                        let x0y3 = get_pixel(x * 4, y * 4 + 3);
+                for y in (0..height).step_by(4) {
+                    for x in (0..width).step_by(4) {
+                        let x0y0 = get_pixel(x, y);
+                        let x0y1 = get_pixel(x, y + 1);
+                        let x0y2 = get_pixel(x, y + 2);
+                        let x0y3 = get_pixel(x, y + 3);
 
-                        let x1y0 = get_pixel(x * 4 + 1, y * 4);
-                        let x1y1 = get_pixel(x * 4 + 1, y * 4 + 1);
-                        let x1y2 = get_pixel(x * 4 + 1, y * 4 + 2);
-                        let x1y3 = get_pixel(x * 4 + 1, y * 4 + 3);
+                        let x1y0 = get_pixel(x + 1, y);
+                        let x1y1 = get_pixel(x + 1, y + 1);
+                        let x1y2 = get_pixel(x + 1, y + 2);
+                        let x1y3 = get_pixel(x + 1, y + 3);
 
-                        let x2y0 = get_pixel(x * 4 + 2, y * 4);
-                        let x2y1 = get_pixel(x * 4 + 2, y * 4 + 1);
-                        let x2y2 = get_pixel(x * 4 + 2, y * 4 + 2);
-                        let x2y3 = get_pixel(x * 4 + 2, y * 4 + 3);
+                        let x2y0 = get_pixel(x + 2, y);
+                        let x2y1 = get_pixel(x + 2, y + 1);
+                        let x2y2 = get_pixel(x + 2, y + 2);
+                        let x2y3 = get_pixel(x + 2, y + 3);
 
-                        let x3y0 = get_pixel(x * 4 + 3, y * 4);
-                        let x3y1 = get_pixel(x * 4 + 3, y * 4 + 1);
-                        let x3y2 = get_pixel(x * 4 + 3, y * 4 + 2);
-                        let x3y3 = get_pixel(x * 4 + 3, y * 4 + 3);
+                        let x3y0 = get_pixel(x + 3, y);
+                        let x3y1 = get_pixel(x + 3, y + 1);
+                        let x3y2 = get_pixel(x + 3, y + 2);
+                        let x3y3 = get_pixel(x + 3, y + 3);
 
                         out_bytes.extend_from_slice(
                             &jkl::image::block::bc1::Block::encode([

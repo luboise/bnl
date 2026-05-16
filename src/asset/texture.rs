@@ -5,11 +5,13 @@ use std::{
 };
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use image::EncodableLayout;
 
 use crate::{
     VirtualResource, VirtualResourceError,
     asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType, Dump},
     d3d::{D3DFormat, PixelBits},
+    transcode_image,
 };
 
 const TEXTURE_DESCRIPTOR_SIZE: usize = 28;
@@ -27,28 +29,6 @@ pub struct TextureDescriptor {
 }
 
 impl TextureDescriptor {
-    pub fn new(
-        format: D3DFormat,
-        header_size: u32,
-        width: u16,
-        height: u16,
-        flags: u32,
-        unknown_3a: u32,
-        texture_offset: u32,
-        texture_size: u32,
-    ) -> Self {
-        Self {
-            format,
-            header_size,
-            width,
-            height,
-            flags,
-            unknown_3a,
-            texture_offset,
-            texture_size,
-        }
-    }
-
     pub fn format(&self) -> D3DFormat {
         self.format
     }
@@ -116,13 +96,66 @@ impl Texture {
         }
     }
 
+    /// Load a texture from a path with no mipmap
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {
+        let image = image::open(path)?.to_rgba8();
+        Ok(Self {
+            descriptor: TextureDescriptor {
+                format: D3DFormat::RGBA8,
+                header_size: 28,
+                width: image.width().try_into()?,
+                height: image.height().try_into()?,
+                // TODO: 1 mip, Figure out other flags
+                flags: 0x01000000,
+                unknown_3a: 0,
+                texture_offset: 0,
+                texture_size: 0,
+            },
+            bytes: image.as_bytes().to_owned(),
+        })
+    }
+
+    /// Override this texture with data from another texture
+    // TODO: Make this retain this textures format
+    pub fn override_from(
+        &mut self,
+        other: &Self,
+        resize: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if resize
+            && (self.descriptor.width, self.descriptor.height)
+                != (other.descriptor.width, other.descriptor.height)
+        {
+            todo!("resize not implemented yet on textures");
+        }
+
+        // Convert other texture into our own format
+        let transcoded = transcode_image(
+            other.descriptor.width.into(),
+            other.descriptor.height.into(),
+            other.descriptor.format,
+            self.descriptor.format,
+            &other.bytes,
+        )?;
+
+        self.descriptor.width = other.descriptor.width;
+        self.descriptor.height = other.descriptor.height;
+
+        // TODO: Properly set mip levels rather than copy whole u32
+        self.descriptor.flags &= 0x00FFFFFF | other.descriptor.flags;
+
+        self.bytes = transcoded;
+
+        Ok(())
+    }
+
     pub fn to_rgba_image(&self) -> Result<RGBAImage, Box<dyn std::error::Error>> {
         Ok(RGBAImage {
             width: self.descriptor.width as usize,
             height: self.descriptor.height as usize,
             bytes: crate::transcode_image(
-                self.descriptor.width.try_into()?,
-                self.descriptor.height.try_into()?,
+                self.descriptor.width.into(),
+                self.descriptor.height.into(),
                 self.descriptor.format,
                 D3DFormat::RGBA8,
                 &self.bytes,
