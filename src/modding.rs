@@ -8,8 +8,9 @@ use std::{
 use crate::{
     BNLFile,
     asset::{
-        AssetDescriptor, AssetLike, AssetParseError, AssetType, Dump, Parse, aidlist::AidList,
-        model::TexturedModel,
+        AssetDescriptor, AssetLike, AssetParseError, AssetType, Parse,
+        aidlist::AidList,
+        model::{TexturedModel, TexturedModelSubresource},
     },
 };
 use regex::Regex;
@@ -523,8 +524,14 @@ impl crate::modding::ModLike for ModelMod {
         )?;
 
         for (index, new_texture) in &self.textures {
-            let existing_tex = tm
-                .textures_subresource
+            let Some(TexturedModelSubresource::Textures(texture_subres)) = tm
+                .subresources
+                .get_mut(&crate::asset::model::ModelSubresType::Texture)
+            else {
+                return Err("no texture subres".into());
+            };
+
+            let existing_tex = texture_subres
                 .textures
                 .get_mut(usize::try_from(*index)?)
                 .ok_or_else(|| format!("no texture for index {index}"))?;
