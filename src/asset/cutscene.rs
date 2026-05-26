@@ -4,11 +4,6 @@ use byteorder::{LittleEndian, ReadBytesExt};
 
 #[derive(Debug, Clone)]
 pub struct Cutscene {
-    pub descriptor: CutsceneDescriptor,
-}
-
-#[derive(Debug, Clone)]
-pub struct CutsceneDescriptor {
     pub count_1: u8,
     pub count_2: u8,
     pub num_cameras: u8,
@@ -17,9 +12,16 @@ pub struct CutsceneDescriptor {
     pub rest_raw: Vec<u8>,
 }
 
-impl super::AssetDescriptor for CutsceneDescriptor {
-    fn from_bytes(data: &[u8]) -> Result<Self, super::AssetParseError> {
-        let mut cur = std::io::Cursor::new(&data);
+impl TryFrom<crate::RawAssetData> for Cutscene {
+    type Error = crate::Error;
+
+    fn try_from(value: crate::RawAssetData) -> Result<Self, Self::Error> {
+        let crate::RawAssetData {
+            descriptor_bytes,
+            resource_chunks: _,
+        } = value;
+
+        let mut cur = std::io::Cursor::new(descriptor_bytes);
         let count_1 = cur.read_u8()?;
         let count_2 = cur.read_u8()?;
         let num_cameras = cur.read_u8()?;
@@ -31,7 +33,7 @@ impl super::AssetDescriptor for CutsceneDescriptor {
 
         cur.read_to_end(&mut raw)?;
 
-        Ok(CutsceneDescriptor {
+        Ok(Self {
             count_1,
             count_2,
             num_cameras,
@@ -40,46 +42,29 @@ impl super::AssetDescriptor for CutsceneDescriptor {
             rest_raw: raw,
         })
     }
+}
 
-    fn to_bytes(&self) -> Result<Vec<u8>, super::AssetParseError> {
+impl TryFrom<Cutscene> for crate::RawAssetData {
+    type Error = crate::Error;
+
+    fn try_from(value: Cutscene) -> Result<Self, Self::Error> {
         let mut ret = vec![
-            self.count_1,
-            self.count_2,
-            self.num_cameras,
-            self.num_animations,
+            value.count_1,
+            value.count_2,
+            value.num_cameras,
+            value.num_animations,
         ];
 
-        ret.extend(self.length.to_le_bytes());
-        ret.extend(&self.rest_raw);
+        ret.extend(value.length.to_le_bytes());
+        ret.extend(&value.rest_raw);
 
-        Ok(ret)
-    }
-
-    fn size(&self) -> usize {
-        8 + self.rest_raw.len()
-    }
-
-    fn asset_type() -> super::AssetType {
-        super::AssetType::ResCutscene
+        Ok(crate::RawAssetData {
+            descriptor_bytes: ret,
+            resource_chunks: vec![],
+        })
     }
 }
 
-impl super::AssetLike for Cutscene {
-    type Descriptor = CutsceneDescriptor;
-
-    fn new(
-        descriptor: &Self::Descriptor,
-        _virtual_res: &crate::VirtualResource,
-    ) -> Result<Self, super::AssetParseError> {
-        let descriptor = descriptor.clone();
-        Ok(Self { descriptor })
-    }
-
-    fn get_descriptor(&self) -> Self::Descriptor {
-        self.descriptor.clone()
-    }
-
-    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
-        None
-    }
+impl super::AssetData for Cutscene {
+    const ASSET_TYPE: super::AssetType = super::AssetType::Cutscene;
 }
