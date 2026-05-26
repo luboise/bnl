@@ -4,8 +4,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use gltf_writer::gltf::{NodeTransform, Quaternion};
 
 use crate::{
-    VirtualResource,
-    asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType},
+    asset::{AssetParseError, AssetType},
     utils::bitstream::BitStream,
 };
 
@@ -500,23 +499,6 @@ impl Anim {
         &self.keyframes
     }
 
-    // pub fn get_channels(&self) -> Vec<Vec<NodeTransform>> {
-    //     let num_channels = self
-    //         .keyframes
-    //         .iter()
-    //         .fold(0usize, |acc, kf| acc.max(kf.transforms.len()));
-    //
-    //     let mut channels = vec![vec![]; num_channels];
-    //
-    //     for keyframe in &self.keyframes {
-    //         for (i, transform) in keyframe.as_node_transforms().into_iter().enumerate() {
-    //             channels[i].push(transform);
-    //         }
-    //     }
-    //
-    //     channels
-    // }
-
     pub fn get_bone_anim_channels(&self) -> Vec<BoneAnimChannel> {
         let num_channels = self
             .keyframes
@@ -603,7 +585,7 @@ impl Anim {
     }
 }
 
-impl AssetDescriptor for AnimDescriptor {
+impl AnimDescriptor {
     fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError> {
         let mut cur = Cursor::new(data);
 
@@ -695,48 +677,47 @@ impl AssetDescriptor for AnimDescriptor {
             keyframe_bytes,
         })
     }
-
-    fn size(&self) -> usize {
-        todo!();
-    }
-
-    fn asset_type() -> AssetType {
-        AssetType::ResAnim
-    }
-
-    fn to_bytes(&self) -> Result<Vec<u8>, AssetParseError> {
-        todo!();
-    }
 }
 
-impl AssetLike for Anim {
-    type Descriptor = AnimDescriptor;
+impl TryFrom<crate::RawAssetData> for Anim {
+    type Error = crate::Error;
 
-    fn new(descriptor: &Self::Descriptor, _: &VirtualResource) -> Result<Self, AssetParseError> {
+    fn try_from(value: crate::RawAssetData) -> Result<Self, Self::Error> {
+        let crate::RawAssetData {
+            descriptor_bytes,
+            resource_chunks: _,
+        } = value;
+
+        let descriptor = AnimDescriptor::from_bytes(&descriptor_bytes)?;
+
         if descriptor.keyframe_bytes.is_empty()
             || descriptor.keyframe_size == 0
             || descriptor.keyframe_size as usize > descriptor.keyframe_bytes.len()
         {
-            return Err(AssetParseError::ErrorParsingDescriptor);
+            return Err("no keyframes".into());
         }
 
         let keyframes = descriptor
             .keyframe_bytes
             .chunks_exact(descriptor.keyframe_size as usize)
-            .map(|chunk| AnimKeyframe::new(descriptor, chunk))
+            .map(|chunk| AnimKeyframe::new(&descriptor, chunk))
             .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
-            descriptor: descriptor.clone(),
+            descriptor,
             keyframes,
         })
     }
+}
 
-    fn get_descriptor(&self) -> Self::Descriptor {
-        self.descriptor.clone()
-    }
+impl TryFrom<Anim> for crate::RawAssetData {
+    type Error = crate::Error;
 
-    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
-        None
+    fn try_from(_value: Anim) -> Result<Self, Self::Error> {
+        todo!()
     }
+}
+
+impl super::AssetData for Anim {
+    const ASSET_TYPE: AssetType = AssetType::Anim;
 }
