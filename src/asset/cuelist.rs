@@ -1,12 +1,8 @@
-use crate::{
-    VirtualResource,
-    asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType},
-};
+use crate::asset::AssetData;
 
 #[derive(Debug, Clone)]
 pub struct CueList {
-    descriptor: CueListDescriptor,
-    data: Vec<Vec<u8>>,
+    groups: Vec<CueGroup>,
 }
 
 #[derive(Debug, Clone)]
@@ -24,14 +20,9 @@ impl CueGroup {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct CueListDescriptor {
-    groups: Vec<CueGroup>,
-}
-
-/// Example
-/// if let Some((group, cue)) = cue_list.get_cue("")
-impl CueListDescriptor {
+impl CueList {
+    /// Example
+    /// if let Some((group, cue)) = cue_list.get_cue("")
     pub fn get_cue<S: Into<String>>(&self, cue: S) -> Option<(String, String)> {
         let s = cue.into();
 
@@ -49,13 +40,13 @@ impl CueListDescriptor {
 }
 
 pub struct CueListIterator<'cl> {
-    cue_list_descriptor: &'cl CueListDescriptor,
+    cue_list_descriptor: &'cl CueList,
     current_group_index: usize,
     current_cue_index: usize,
 }
 
 impl<'cl> CueListIterator<'cl> {
-    pub(crate) fn new(descriptor: &'cl CueListDescriptor) -> Self {
+    pub(crate) fn new(descriptor: &'cl CueList) -> Self {
         Self {
             cue_list_descriptor: descriptor,
             current_group_index: 0,
@@ -104,33 +95,39 @@ impl<'cl> Iterator for CueListIterator<'cl> {
     }
 }
 
-impl CueListDescriptor {
+impl CueList {
     pub fn cues(&self) -> CueListIterator<'_> {
         CueListIterator::new(self)
     }
 }
 
-impl AssetDescriptor for CueListDescriptor {
-    fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError> {
-        let s = String::from_utf8(data.to_owned())
-            .map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
+impl TryFrom<crate::RawAssetData> for CueList {
+    type Error = crate::Error;
+
+    fn try_from(value: crate::RawAssetData) -> Result<Self, Self::Error> {
+        let crate::RawAssetData {
+            descriptor_bytes,
+            resource_chunks: _,
+        } = value;
+
+        let s = String::from_utf8(descriptor_bytes)?;
 
         let lines: Vec<(String, String)> = s
             .lines()
             .filter(|line| !line.is_empty())
-            .map(|line| -> Result<(String, String), AssetParseError> {
+            .map(|line| {
                 let parts: Vec<&str> = line.split('\t').collect();
 
                 // Must match format Ggroup\tname\n
                 if parts.len() != 2 {
-                    return Err(AssetParseError::ErrorParsingDescriptor);
+                    Err("parts len wrong".into())
+                } else {
+                    Ok((parts[0].to_string(), parts[1].to_string()))
                 }
-
-                Ok((parts[0].to_string(), parts[1].to_string()))
             })
-            .collect::<Result<Vec<(String, String)>, AssetParseError>>()?;
+            .collect::<Result<Vec<(String, String)>, crate::Error>>()?;
 
-        let mut descriptor = CueListDescriptor { groups: vec![] };
+        let mut groups = vec![];
 
         let mut group = CueGroup {
             name: "".to_string(),
@@ -140,7 +137,7 @@ impl AssetDescriptor for CueListDescriptor {
         for (group_name, entry) in lines {
             if group.name != group_name {
                 if !group.cues.is_empty() {
-                    descriptor.groups.push(group);
+                    groups.push(group);
                 }
 
                 group = CueGroup::new(group_name, None);
@@ -149,65 +146,40 @@ impl AssetDescriptor for CueListDescriptor {
             group.cues.push(entry)
         }
 
-        Ok(descriptor)
+        Ok(Self { groups })
     }
+}
 
-    fn to_bytes(&self) -> Result<Vec<u8>, AssetParseError> {
+impl TryFrom<CueList> for crate::RawAssetData {
+    type Error = crate::Error;
+
+    fn try_from(value: CueList) -> Result<Self, Self::Error> {
         // let mut bytes = Vec::new();
 
         let mut lines = vec![];
 
-        if !self.validate() {
-            return Err(AssetParseError::InvalidDataViews(
+        if !value.validate() {
+            return Err(crate::asset::AssetParseError::InvalidDataViews(
                 "Failed to validate, empty string found.".to_string(),
-            ));
+            )
+            .into());
         }
 
-        for group in &self.groups {
+        for group in &value.groups {
             for cue in &group.cues {
                 lines.push(format!("{}\t{}", group.name, cue));
             }
         }
 
-        Ok(lines.join("\n").chars().map(|c| c as u8).collect())
-    }
-
-    fn asset_type() -> AssetType {
-        AssetType::ResXCueList
-    }
-
-    fn size(&self) -> usize {
-        self.to_bytes().iter().len()
+        Ok(crate::RawAssetData {
+            descriptor_bytes: lines.join("\n").chars().map(|c| c as u8).collect(),
+            resource_chunks: vec![],
+        })
     }
 }
 
-impl AssetLike for CueList {
-    type Descriptor = CueListDescriptor;
-
-    fn new(
-        descriptor: &Self::Descriptor,
-        virtual_res: &VirtualResource,
-    ) -> Result<Self, AssetParseError> {
-        Ok(CueList {
-            descriptor: descriptor.clone(),
-            data: virtual_res
-                .slices
-                .iter()
-                .map(|slice| slice.to_vec())
-                .collect(),
-        })
-    }
-
-    fn get_descriptor(&self) -> Self::Descriptor {
-        self.descriptor.clone()
-    }
-
-    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
-        match self.data.len() {
-            0 => None,
-            _ => Some(self.data.clone()),
-        }
-    }
+impl AssetData for CueList {
+    const ASSET_TYPE: super::AssetType = super::AssetType::XCueList;
 }
 
 #[cfg(test)]
@@ -247,10 +219,10 @@ pub mod tests {
             })
             .collect();
 
-        let cue_list_descriptor = CueListDescriptor { groups };
+        let cue_list = CueList { groups };
 
         assert_eq!(
-            cue_list_descriptor
+            cue_list
                 .cues()
                 .map(|(s1, s2)| (s1.to_owned(), s2.to_owned()))
                 .collect::<Vec<(String, String)>>(),
