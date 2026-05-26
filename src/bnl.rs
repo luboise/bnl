@@ -5,24 +5,19 @@ use std::{
     path::{self, Path, PathBuf},
 };
 
+use binrw::{BinReaderExt, BinWrite};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use miniz_oxide::inflate::TINFLStatus;
 
-use crate::{
-    VirtualResource,
-    asset::{
-        ASSET_DESCRIPTION_SIZE, Asset, AssetDescription, AssetDescriptor, AssetError, AssetLike,
-        AssetName, AssetParseError, AssetType, DataViewList,
-    },
+use crate::asset::{
+    ASSET_DESCRIPTION_SIZE, Asset, AssetData, AssetDescription, AssetError, AssetName,
+    AssetParseError, AssetType, DataViewList,
 };
 
 #[derive(Debug, Default)]
-pub struct BNLFile {
-    header: BNLHeader,
-    assets: Vec<RawAsset>,
-}
-
-#[derive(Debug, Default)]
+#[binrw::binrw]
+#[br(little)]
+#[bw(little)]
 pub struct BNLHeader {
     pub(crate) file_count: u16,
     pub(crate) flags: u8,
@@ -35,6 +30,9 @@ pub struct BNLHeader {
 }
 
 #[derive(Debug, Copy, Clone, Default)]
+#[binrw::binrw]
+#[br(little)]
+#[bw(little)]
 pub struct DataView {
     pub(crate) offset: u32,
     pub(crate) size: u32,
@@ -70,42 +68,6 @@ impl DataView {
 
         start1 < end2 && start2 < end1
         */
-    }
-}
-
-impl BNLHeader {
-    pub fn to_bytes(&self) -> [u8; 40] {
-        let mut bytes = [0x00; 40];
-
-        let mut cur = Cursor::new(&mut bytes[..]);
-
-        cur.write_u16::<LittleEndian>(self.file_count).unwrap();
-        cur.write_u8(self.flags).unwrap();
-
-        self.unknown_2.iter().for_each(|val| {
-            cur.write_u8(*val).unwrap();
-        });
-
-        cur.write_u32::<LittleEndian>(self.asset_desc_loc.offset)
-            .unwrap();
-        cur.write_u32::<LittleEndian>(self.asset_desc_loc.size)
-            .unwrap();
-
-        cur.write_u32::<LittleEndian>(self.buffer_views_loc.offset)
-            .unwrap();
-        cur.write_u32::<LittleEndian>(self.buffer_views_loc.size)
-            .unwrap();
-
-        cur.write_u32::<LittleEndian>(self.buffer_loc.offset)
-            .unwrap();
-        cur.write_u32::<LittleEndian>(self.buffer_loc.size).unwrap();
-
-        cur.write_u32::<LittleEndian>(self.descriptor_loc.offset)
-            .unwrap();
-        cur.write_u32::<LittleEndian>(self.descriptor_loc.size)
-            .unwrap();
-
-        bytes
     }
 }
 
@@ -222,26 +184,8 @@ impl AssetMetadata {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RawAsset {
-    pub metadata: AssetMetadata,
-    pub descriptor_bytes: Vec<u8>,
-    pub resource_chunks: Option<Vec<Vec<u8>>>,
-}
-
+pub type RawAsset = Asset<RawAssetData>;
 impl RawAsset {
-    pub fn new(
-        metadata: AssetMetadata,
-        descriptor_bytes: Vec<u8>,
-        resource_chunks: Option<Vec<Vec<u8>>>,
-    ) -> Self {
-        Self {
-            metadata,
-            descriptor_bytes,
-            resource_chunks,
-        }
-    }
-
     pub fn from_dir<P: AsRef<path::Path>>(path: P) -> Result<Self, AssetParseError> {
         let path_ref = path.as_ref();
 
@@ -280,86 +224,89 @@ impl RawAsset {
             }
         });
 
-        let metadata_bytes =
-            fs::read(metadata_path).map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
+        let metadata_bytes = fs::read(metadata_path)?;
+        let descriptor_bytes = fs::read(descriptor_path)?;
 
-        let descriptor_bytes =
-            fs::read(descriptor_path).map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
-
-        let resource_files: Vec<Vec<u8>> = resource_paths
+        let resource_chunks: Vec<Vec<u8>> = resource_paths
             .into_iter()
             .map(fs::read)
             .collect::<Result<_, _>>()?;
-
-        let resource_chunks = match resource_files.is_empty() {
-            true => None,
-            false => Some(resource_files),
-        };
 
         let metadata = AssetMetadata::from_bytes(&metadata_bytes)?;
 
         Ok(Self {
             metadata,
+            data: RawAssetData {
+                descriptor_bytes,
+                resource_chunks,
+            },
+        })
+    }
+}
+
+impl AssetData for RawAssetData {
+    const ASSET_TYPE: AssetType = AssetType::Raw;
+}
+
+#[derive(Debug, Clone)]
+pub struct RawAssetData {
+    pub descriptor_bytes: Vec<u8>,
+    pub resource_chunks: Vec<Vec<u8>>,
+}
+
+impl TryFrom<RawAssetData> for crate::xsb::XSoundbank {
+    type Error = crate::Error;
+
+    fn try_from(value: RawAssetData) -> Result<Self, Self::Error> {
+        Ok(std::io::Cursor::new(&value.descriptor_bytes).read_le()?)
+    }
+}
+
+impl TryFrom<crate::xsb::XSoundbank> for RawAssetData {
+    type Error = crate::Error;
+
+    fn try_from(_: crate::xsb::XSoundbank) -> Result<Self, Self::Error> {
+        todo!("XSoundbank into asset not implemented yet")
+    }
+}
+
+impl RawAssetData {
+    pub fn new(descriptor_bytes: Vec<u8>, resource_chunks: Vec<Vec<u8>>) -> Self {
+        Self {
             descriptor_bytes,
             resource_chunks,
-        })
+        }
     }
 
     /// Combines the resource chunks into a single Vec and returns them
     pub fn resource(&self) -> Option<Vec<u8>> {
-        self.resource_chunks
-            .clone()
-            .map(|v| v.into_iter().flatten().collect())
+        (!self.resource_chunks.is_empty())
+            .then(|| self.resource_chunks.clone().into_iter().flatten().collect())
     }
 
-    pub fn name(&self) -> &str {
-        self.metadata.name()
-    }
-
-    pub fn metadata(&self) -> &AssetMetadata {
-        &self.metadata
-    }
-    pub fn metadata_mut(&mut self) -> &mut AssetMetadata {
-        &mut self.metadata
-    }
-
+    #[deprecated(note = "Access the field directly instead")]
     pub fn descriptor_bytes(&self) -> &[u8] {
         &self.descriptor_bytes
     }
+    #[deprecated(note = "Access the field directly instead")]
     pub fn descriptor_bytes_mut(&mut self) -> &mut Vec<u8> {
         &mut self.descriptor_bytes
     }
 
     pub fn resource_chunks(&self) -> Option<&Vec<Vec<u8>>> {
-        self.resource_chunks.as_ref()
+        (!self.resource_chunks.is_empty()).then_some(&self.resource_chunks)
     }
-    pub fn resource_chunks_mut(&mut self) -> &mut Option<Vec<Vec<u8>>> {
-        &mut self.resource_chunks
+    pub fn resource_chunks_mut(&mut self) -> Option<&mut Vec<Vec<u8>>> {
+        self.resource_chunks
+            .is_empty()
+            .then(|| self.resource_chunks.as_mut())
     }
+}
 
-    pub fn to_asset<AL: AssetLike>(self) -> Result<Asset<AL>, AssetError> {
-        let description = &self.metadata;
-
-        if description.asset_type() != AL::asset_type() {
-            return Err(AssetError::TypeMismatch);
-        }
-
-        let descriptor = AL::Descriptor::from_bytes(&self.descriptor_bytes)?;
-
-        let slices: Vec<&[u8]> = match &self.resource_chunks {
-            Some(slices) => slices.iter().map(|slice| slice.as_ref()).collect(),
-            None => vec![],
-        };
-
-        let vr = VirtualResource::from_slices(&slices);
-
-        let asset = AL::new(&descriptor, &vr)?;
-
-        Ok(Asset {
-            metadata: description.clone(),
-            asset,
-        })
-    }
+#[derive(Debug, Default)]
+pub struct BNLFile {
+    header: BNLHeader,
+    assets: Vec<RawAsset>,
 }
 
 impl BNLFile {
@@ -381,32 +328,23 @@ impl BNLFile {
     let bnl = BNLFile::from_bytes(&bytes).expect("Unable to parse BNL.");
     ```
     */
-    pub fn from_bytes(bnl_bytes: &[u8]) -> Result<Self, BNLError> {
+    pub fn from_bytes(bnl_bytes: &[u8]) -> Result<Self, crate::Error> {
         if bnl_bytes.len() < 40 {
-            return Err(BNLError::DataReadError(format!(
+            return Err(format!(
                 "Length of BNL file must be at least 40 bytes (received {})",
                 bnl_bytes.len()
-            )));
+            )
+            .into());
         }
 
         let mut bytes = bnl_bytes[..40].to_vec();
 
         let mut cur = Cursor::new(bnl_bytes);
 
-        let mut header = BNLHeader {
-            file_count: cur.read_u16::<LittleEndian>()?,
-            flags: cur.read_u8()?,
-            ..Default::default()
-        };
+        let header = cur.read_le()?;
 
-        cur.read_exact(&mut header.unknown_2)?;
-
-        header.asset_desc_loc = DataView::from_reader(&mut cur)?;
-        header.buffer_views_loc = DataView::from_reader(&mut cur)?;
-        header.buffer_loc = DataView::from_reader(&mut cur)?;
-        header.descriptor_loc = DataView::from_reader(&mut cur)?;
-
-        let decompressed_bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&bnl_bytes[40..])?;
+        let decompressed_bytes = miniz_oxide::inflate::decompress_to_vec_zlib(&bnl_bytes[40..])
+            .map_err(|e| e.to_string())?;
         bytes.extend_from_slice(&decompressed_bytes);
 
         cur = Cursor::new(&bytes);
@@ -453,68 +391,72 @@ impl BNLFile {
 
             let desc_start: usize = description.descriptor_ptr as usize;
             let desc_end: usize = desc_start + description.descriptor_size as usize;
-            let desc_bytes = descriptor_bytes[desc_start..desc_end].to_vec();
+            let descriptor_bytes = descriptor_bytes
+                .get(desc_start..desc_end)
+                .ok_or_else(|| "index out of range".to_owned())?
+                .to_vec();
 
-            let resource_chunks: Option<Vec<Vec<u8>>> = match description.resource_size {
-                0 => None,
-                _size => Some(
-                    DataViewList::from_bytes(
-                        &buffer_views_bytes[description.dataview_list_ptr as usize..],
-                    )
-                    .map_err(|_| {
-                        BNLError::DataReadError("Unable to read BufferViews.".to_string())
-                    })?
-                    .slices(&buffer_bytes)?
-                    .iter()
-                    .map(|slice| slice.to_vec())
-                    .collect(),
-                ),
+            let resource_chunks = if description.resource_size == 0 {
+                vec![]
+            } else {
+                DataViewList::from_bytes(
+                    buffer_views_bytes
+                        .get(description.dataview_list_ptr as usize..)
+                        .ok_or_else(|| "bad data view list".to_owned())?,
+                )?
+                .slices(&buffer_bytes)?
+                .iter()
+                .map(|slice| slice.to_vec())
+                .collect()
             };
 
             // TODO: Resize this then push into it
-            new_bnl.assets.push(RawAsset {
+            new_bnl.assets.push(Asset {
                 metadata: description.metadata,
-                descriptor_bytes: desc_bytes,
-                resource_chunks,
+                data: RawAssetData {
+                    descriptor_bytes,
+                    resource_chunks,
+                },
             });
         }
 
         Ok(new_bnl)
     }
 
-    pub fn to_bytes(&mut self) -> Vec<u8> {
+    pub fn to_bytes(&mut self) -> Result<Vec<u8>, crate::Error> {
         let mut asset_desc_section: Vec<u8> =
             vec![0x00; ASSET_DESCRIPTION_SIZE * self.assets.len()];
         let mut buffer_views_section: Vec<u8> = vec![];
         let mut buffer_section: Vec<u8> = vec![];
         let mut descriptors_section: Vec<u8> = vec![];
 
-        self.assets.sort_by_key(|v| v.name().to_string());
+        self.assets.sort_by_key(|v| v.metadata.name().to_string());
 
         for (i, asset) in self.assets.iter().enumerate() {
             let metadata = asset.metadata.clone();
             let mut asset_desc: AssetDescription = metadata.into();
 
-            if let Some(chunks) = &asset.resource_chunks {
-                let num_chunks = chunks.len();
-
+            let num_chunks = asset.data.resource_chunks.len();
+            if num_chunks > 0 {
                 let dvl = DataViewList {
                     size: (8 + 8 * num_chunks) as u32,
                     num_views: num_chunks as u32,
-                    views: chunks
+                    views: asset
+                        .data
+                        .resource_chunks
                         .iter()
                         .map(|chunk| {
                             let offset = buffer_section.len();
 
                             // TODO: Find a way to propagate this, or safely ignore it
-                            let _ = buffer_section.write_all(chunk);
+                            buffer_section.write_all(chunk)?;
 
-                            DataView {
+                            Ok(DataView {
                                 offset: offset as u32,
                                 size: chunk.len() as u32,
-                            }
+                            })
                         })
-                        .collect(),
+                        .collect::<Result<_, crate::Error>>()?,
                 };
 
                 let dvl_bytes = dvl.to_bytes();
@@ -528,8 +470,8 @@ impl BNLFile {
             }
 
             asset_desc.descriptor_ptr = descriptors_section.len() as u32;
-            asset_desc.descriptor_size = asset.descriptor_bytes.len() as u32;
-            descriptors_section.extend_from_slice(&asset.descriptor_bytes);
+            asset_desc.descriptor_size = asset.data.descriptor_bytes.len() as u32;
+            descriptors_section.extend_from_slice(&asset.data.descriptor_bytes);
 
             let start = i * ASSET_DESCRIPTION_SIZE;
             let end = start + ASSET_DESCRIPTION_SIZE;
@@ -583,19 +525,20 @@ impl BNLFile {
 
         let mut bytes = vec![0; compressed_bytes.len() + 40];
 
-        bytes[0..40].copy_from_slice(&self.header.to_bytes());
+        let mut writer = std::io::Cursor::new(&mut bytes);
+        self.header.write_le(&mut writer)?;
         bytes[40..].copy_from_slice(&compressed_bytes);
 
-        bytes
+        Ok(bytes)
     }
 
     /// Retrieves an asset by name and type, converting it to the target format if it matches the
     /// format of the asset's descriptor.
     ///
     /// # Errors
-    /// - [`AssetError::NotFound`] when the given name can't be found
-    /// - [`AssetError::TypeMismatch`] when the asset is found, but doesn't match the requested type
-    /// - [`AssetError::ParseError`] when the asset is found, the type matches but an error occurs while parsing the asset
+    /// - Name not found
+    /// - Type mismatch
+    /// - Parse error
     ///
     /// # Examples
     /// ```
@@ -606,29 +549,23 @@ impl BNLFile {
     /// let tex = bnl_file.get_asset::<Texture>("aid_texture_mytexture_a_b")
     ///                   .expect("Unable to get texture.");
     /// ```
-    pub fn get_asset<AL: AssetLike>(&self, name: &str) -> Result<Asset<AL>, AssetError> {
-        let raw_asset = self.get_raw_asset(name).ok_or(AssetError::NotFound)?;
+    pub fn get_asset<AD>(&self, name: &str) -> Result<Asset<AD>, crate::Error>
+    where
+        AD: AssetData + TryFrom<RawAssetData, Error = crate::Error>,
+    {
+        let raw_asset = self
+            .get_raw_asset(name)
+            .ok_or_else(|| "not found".to_owned())?;
 
-        let description = &raw_asset.metadata;
+        let metadata = raw_asset.metadata.clone();
 
-        if description.asset_type() != AL::asset_type() {
-            return Err(AssetError::TypeMismatch);
+        if metadata.asset_type() != AD::asset_type() {
+            return Err("type mismatch".into());
         }
 
-        let descriptor = AL::Descriptor::from_bytes(&raw_asset.descriptor_bytes)?;
-
-        let slices: Vec<&[u8]> = match &raw_asset.resource_chunks {
-            Some(slices) => slices.iter().map(|slice| slice.as_ref()).collect(),
-            None => vec![],
-        };
-
-        let vr = VirtualResource::from_slices(&slices);
-
-        let asset = AL::new(&descriptor, &vr)?;
-
         Ok(Asset {
-            metadata: description.clone(),
-            asset,
+            metadata: raw_asset.metadata.clone(),
+            data: raw_asset.data.clone().try_into()?,
         })
     }
 
@@ -645,28 +582,26 @@ impl BNLFile {
     ///
     /// // Dump all of the textures here
     /// ```
-    pub fn get_assets<AL: AssetLike>(&self) -> Vec<AL> {
+    pub fn get_assets<AD: AssetData + TryInto<RawAssetData, Error = crate::Error>>(
+        &self,
+    ) -> Vec<Asset<AD>> {
         let mut assets = Vec::new();
 
         for asset in &self.assets {
             let asset_desc = &asset.metadata;
 
-            if asset_desc.asset_type() != AL::asset_type() {
+            if asset_desc.asset_type() != AD::asset_type() {
                 continue;
             }
 
-            if let Ok(descriptor) = AL::Descriptor::from_bytes(&asset.descriptor_bytes) {
-                let slices: Vec<&[u8]> = match &asset.resource_chunks {
-                    Some(slices) => slices.iter().map(|slice| slice.as_ref()).collect(),
-                    None => vec![],
-                };
+            let Ok(transformed) = asset.data.clone().try_into() else {
+                continue;
+            };
 
-                let vr = VirtualResource::from_slices(&slices);
-
-                if let Ok(asset) = AL::new(&descriptor, &vr) {
-                    assets.push(asset);
-                }
-            }
+            assets.push(Asset {
+                metadata: asset.metadata.clone(),
+                data: transformed,
+            });
         }
 
         assets
@@ -780,14 +715,19 @@ impl BNLFile {
     }
     */
 
-    pub fn modify_asset<AL, F>(&mut self, name: &str, f: F) -> Result<(), AssetError>
+    pub fn modify_asset<AD, F>(&mut self, name: &str, f: F) -> Result<(), crate::Error>
     where
-        AL: AssetLike,
-        F: FnOnce(&mut Asset<AL>) -> Result<(), AssetError>,
+        AD: TryFrom<RawAssetData, Error = crate::Error>
+            + TryInto<RawAssetData, Error = crate::Error>,
+        F: FnOnce(&mut Asset<AD>) -> Result<(), crate::Error>,
     {
-        let raw_asset = self.get_raw_asset_mut(name).ok_or(AssetError::NotFound)?;
+        let raw_asset = self.get_raw_asset_mut(name).ok_or("not found")?;
+        let asset = raw_asset.clone();
 
-        let mut asset = raw_asset.clone().to_asset::<AL>()?;
+        let mut asset = Asset {
+            metadata: asset.metadata,
+            data: asset.data.try_into()?,
+        };
 
         f(&mut asset)?;
 
@@ -823,16 +763,11 @@ impl BNLFile {
     }
     */
 
-    pub fn append_asset<AL: AssetLike>(
-        &mut self,
-        metadata: AssetMetadata,
-        new_asset: AL,
-    ) -> Result<(), AssetError> {
-        self.append_raw_asset(RawAsset::new(
-            metadata,
-            new_asset.get_descriptor().to_bytes()?,
-            new_asset.get_resource_chunks(),
-        ));
+    pub fn append_asset<AD>(&mut self, asset: Asset<AD>) -> Result<(), crate::Error>
+    where
+        AD: AssetData + TryInto<RawAssetData, Error = crate::Error>,
+    {
+        self.append_raw_asset(asset.to_raw_asset()?);
 
         Ok(())
     }
@@ -846,7 +781,7 @@ impl BNLFile {
         if let Some(asset) = self
             .assets
             .iter_mut()
-            .find(|asset| asset.name() == new_raw_asset.name())
+            .find(|asset| asset.metadata.name() == new_raw_asset.metadata.name())
         {
             *asset = new_raw_asset;
         } else {
@@ -1018,17 +953,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_bnl_from_raw() -> Result<(), String> {
+    fn new_bnl_from_raw() -> Result<(), crate::Error> {
         let tex_descriptor = include_bytes!("asset/test_data/texture0_descriptor").to_vec();
         let tex_image_bytes = include_bytes!("asset/test_data/texture0_resource0").to_vec();
 
-        let metadata = AssetMetadata::new("aid_sometexture", AssetType::ResTexture, 0, 0);
-        let raw_asset = RawAsset::new(metadata, tex_descriptor, Some(vec![tex_image_bytes]));
+        let metadata = AssetMetadata::new("aid_sometexture", AssetType::Texture, 0, 0);
+        let raw_asset = RawAsset {
+            metadata,
+            data: RawAssetData::new(tex_descriptor, vec![tex_image_bytes]),
+        };
 
         let mut new_bnl = BNLFile::default();
         new_bnl.append_raw_asset(raw_asset);
 
-        let serialised = new_bnl.to_bytes();
+        let serialised = new_bnl.to_bytes()?;
         let deserialised = BNLFile::from_bytes(&serialised)
             .map_err(|_| "Failed to deserialise the BNL file which was just created in memory.")?;
 

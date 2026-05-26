@@ -5,10 +5,7 @@ use std::{
     path::Path,
 };
 
-use crate::{
-    AssetMetadata, DataView, RawAsset, VirtualResource, VirtualResourceError,
-    asset::model::sub_main::SubresourceError,
-};
+use crate::{AssetMetadata, DataView, RawAssetData, VirtualResourceError};
 
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
@@ -27,29 +24,36 @@ pub mod script;
 pub mod texture;
 
 #[derive(Debug, Clone)]
-pub struct Asset<AL: AssetLike> {
-    pub(crate) metadata: AssetMetadata,
-    pub(crate) asset: AL,
+pub struct Asset<AD> {
+    pub metadata: AssetMetadata,
+    pub data: AD,
 }
 
-impl<AL: AssetLike> Asset<AL> {
+impl<AD> Asset<AD> {
     pub fn metadata(&self) -> &AssetMetadata {
         &self.metadata
     }
 
-    pub fn asset(&self) -> &AL {
-        &self.asset
-    }
-    pub fn asset_mut(&mut self) -> &mut AL {
-        &mut self.asset
+    #[deprecated(note = "Use Asset.metadata.name() instead")]
+    pub fn name(&self) -> &str {
+        self.metadata.name()
     }
 
-    pub fn to_raw_asset(self) -> Result<RawAsset, AssetError> {
-        Ok(RawAsset::new(
-            self.metadata,
-            self.asset.get_descriptor().to_bytes()?,
-            self.asset.get_resource_chunks(),
-        ))
+    pub fn asset(&self) -> &AD {
+        &self.data
+    }
+    pub fn asset_mut(&mut self) -> &mut AD {
+        &mut self.data
+    }
+
+    pub fn to_raw_asset(self) -> Result<crate::RawAsset, crate::Error>
+    where
+        AD: TryInto<RawAssetData, Error = crate::Error>,
+    {
+        Ok(crate::RawAsset {
+            metadata: self.metadata,
+            data: self.data.try_into()?,
+        })
     }
 }
 
@@ -61,7 +65,7 @@ pub struct DataViewList {
 }
 
 impl DataViewList {
-    pub fn from_bytes(view_bytes: &[u8]) -> Result<DataViewList, Box<io::Error>> {
+    pub fn from_bytes(view_bytes: &[u8]) -> Result<DataViewList, crate::Error> {
         if view_bytes.len() < 8 {
             return Err(Box::new(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -254,12 +258,6 @@ impl From<std::io::Error> for AssetParseError {
     }
 }
 
-impl From<SubresourceError> for AssetParseError {
-    fn from(_: SubresourceError) -> Self {
-        Self::ErrorParsingDescriptor
-    }
-}
-
 impl fmt::Display for AssetParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -297,12 +295,6 @@ impl fmt::Display for AssetError {
     }
 }
 
-impl From<AssetParseError> for AssetError {
-    fn from(err: AssetParseError) -> Self {
-        AssetError::ParseError(err)
-    }
-}
-
 pub trait DumpToDir: Dump {
     fn dump_to_dir<P: AsRef<Path>>(&self, dump_dir: P) -> Result<(), std::io::Error>;
 }
@@ -318,37 +310,12 @@ pub trait Parse: Sized {
     fn parse<P: AsRef<Path>>(parse_path: P) -> Result<Self, AssetParseError>;
 }
 
-/// Describes how a given asset is structured. Typically, an AssetDescriptor has information about how
-/// to read an asset from its associated resources, as well as attributes of that asset. For
-/// example, a [`texture::TextureDescriptor`] knows the width and height of its associated texture
-/// resource.
-pub trait AssetDescriptor: Sized + Clone {
-    /// Creates a new AssetDescriptor from bytes.
-    /// TODO: Finish the docs here
-    fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError>;
-
-    fn to_bytes(&self) -> Result<Vec<u8>, AssetParseError>;
-
-    /// The serialised size of the descriptor in bytes
-    fn size(&self) -> usize;
-
-    fn asset_type() -> AssetType;
-}
-
-pub trait AssetLike: Sized {
-    type Descriptor: AssetDescriptor;
-
-    fn new(
-        descriptor: &Self::Descriptor,
-        virtual_res: &VirtualResource,
-    ) -> Result<Self, AssetParseError>;
+pub trait AssetData: Sized + TryFrom<RawAssetData> + TryInto<RawAssetData> {
+    const ASSET_TYPE: AssetType;
 
     fn asset_type() -> AssetType {
-        Self::Descriptor::asset_type()
+        Self::ASSET_TYPE
     }
-
-    fn get_descriptor(&self) -> Self::Descriptor;
-    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>>;
 }
 
 pub type AssetName = [u8; 128];
@@ -373,37 +340,39 @@ pub struct AssetDescription {
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
 #[repr(u32)]
 pub enum AssetType {
-    ResTexture = 1,
-    ResAnim = 2,
-    ResUnknown3 = 3,
-    ResModel = 4,
-    ResAnimEvents = 5,
+    Texture = 1,
+    Anim = 2,
+    Unknown3 = 3,
+    Model = 4,
+    AnimEvents = 5,
 
-    ResCutscene = 7,
-    ResCutsceneEvents = 8,
+    Cutscene = 7,
+    CutsceneEvents = 8,
 
-    ResMisc = 10,
-    ResActorGoals = 11,
-    ResMarker = 12,
-    ResFxCallout = 13,
-    ResAidList = 14,
+    Misc = 10,
+    ActorGoals = 11,
+    Marker = 12,
+    FxCallout = 13,
+    AidList = 14,
 
-    ResLoctext = 16,
+    Loctext = 16,
 
-    ResXSoundbank = 18,
-    ResXDSP = 19,
-    ResXCueList = 20,
-    ResFont = 21,
-    ResGhoulybox = 22,
-    ResGhoulyspawn = 23,
-    ResScript = 24,
-    ResActorAttribs = 25,
-    ResEmitter = 26,
-    ResParticle = 27,
-    ResRumble = 28,
-    ResShakeCam = 29,
+    XSoundbank = 18,
+    XDSP = 19,
+    XCueList = 20,
+    Font = 21,
+    Ghoulybox = 22,
+    Ghoulyspawn = 23,
+    Script = 24,
+    ActorAttribs = 25,
+    Emitter = 26,
+    Particle = 27,
+    Rumble = 28,
+    ShakeCam = 29,
+    Count = 30,
 
-    ResCount, // This will automatically take the next value (30)
+    // Helper to let RawAssetData satisfy AssetLike
+    Raw = 31,
 }
 
 impl Ord for AssetType {
@@ -426,32 +395,33 @@ impl Display for AssetType {
             f,
             "{}",
             match self {
-                AssetType::ResTexture => "Texture",
-                AssetType::ResAnim => "Anim",
-                AssetType::ResUnknown3 => "Unknown3",
-                AssetType::ResModel => "Model",
-                AssetType::ResAnimEvents => "AnimEvents",
-                AssetType::ResCutscene => "Cutscene",
-                AssetType::ResCutsceneEvents => "CutsceneEvents",
-                AssetType::ResMisc => "Misc",
-                AssetType::ResActorGoals => "ActorGoals",
-                AssetType::ResMarker => "Marker",
-                AssetType::ResFxCallout => "FxCallout",
-                AssetType::ResAidList => "AidList",
-                AssetType::ResLoctext => "Loctext",
-                AssetType::ResXSoundbank => "XSoundbank",
-                AssetType::ResXDSP => "XDSP",
-                AssetType::ResXCueList => "XCueList",
-                AssetType::ResFont => "Font",
-                AssetType::ResGhoulybox => "Ghoulybox",
-                AssetType::ResGhoulyspawn => "Ghoulyspawn",
-                AssetType::ResScript => "Script",
-                AssetType::ResActorAttribs => "ActorAttribs",
-                AssetType::ResEmitter => "Emitter",
-                AssetType::ResParticle => "Particle",
-                AssetType::ResRumble => "Rumble",
-                AssetType::ResShakeCam => "ShakeCam",
-                AssetType::ResCount => "Count",
+                AssetType::Texture => "Texture",
+                AssetType::Anim => "Anim",
+                AssetType::Unknown3 => "Unknown3",
+                AssetType::Model => "Model",
+                AssetType::AnimEvents => "AnimEvents",
+                AssetType::Cutscene => "Cutscene",
+                AssetType::CutsceneEvents => "CutsceneEvents",
+                AssetType::Misc => "Misc",
+                AssetType::ActorGoals => "ActorGoals",
+                AssetType::Marker => "Marker",
+                AssetType::FxCallout => "FxCallout",
+                AssetType::AidList => "AidList",
+                AssetType::Loctext => "Loctext",
+                AssetType::XSoundbank => "XSoundbank",
+                AssetType::XDSP => "XDSP",
+                AssetType::XCueList => "XCueList",
+                AssetType::Font => "Font",
+                AssetType::Ghoulybox => "Ghoulybox",
+                AssetType::Ghoulyspawn => "Ghoulyspawn",
+                AssetType::Script => "Script",
+                AssetType::ActorAttribs => "ActorAttribs",
+                AssetType::Emitter => "Emitter",
+                AssetType::Particle => "Particle",
+                AssetType::Rumble => "Rumble",
+                AssetType::ShakeCam => "ShakeCam",
+                AssetType::Count => "Count",
+                AssetType::Raw => "Raw",
             }
         )
     }
@@ -462,34 +432,34 @@ impl TryFrom<&str> for AssetType {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            "texture" => Ok(AssetType::ResTexture),
-            "anim" => Ok(AssetType::ResAnim),
-            "animevents" => Ok(AssetType::ResAnimEvents),
-            "actorgoals" => Ok(AssetType::ResActorGoals),
-            "unknown3" => Ok(AssetType::ResUnknown3),
-            "model" => Ok(AssetType::ResModel),
-            "animevent" => Ok(AssetType::ResAnimEvents),
-            "cutscene" => Ok(AssetType::ResCutscene),
-            "cutsceneevents" => Ok(AssetType::ResCutsceneEvents),
-            "misc" => Ok(AssetType::ResMisc),
-            "actorgoal" => Ok(AssetType::ResActorGoals),
-            "marker" => Ok(AssetType::ResMarker),
-            "callout" => Ok(AssetType::ResFxCallout),
-            "aidlist" => Ok(AssetType::ResAidList),
-            "loctext" => Ok(AssetType::ResLoctext),
-            "soundbank" => Ok(AssetType::ResXSoundbank),
-            "dsp" => Ok(AssetType::ResXDSP),
-            "cue" => Ok(AssetType::ResXCueList),
-            "font" => Ok(AssetType::ResFont),
-            "ghoulybox" => Ok(AssetType::ResGhoulybox),
-            "ghoulyspawn" => Ok(AssetType::ResGhoulyspawn),
-            "script" => Ok(AssetType::ResScript),
-            "actorattribs" => Ok(AssetType::ResActorAttribs),
-            "fxemitter" => Ok(AssetType::ResEmitter),
-            "fxparticle" => Ok(AssetType::ResParticle),
-            "fxrumble" => Ok(AssetType::ResRumble),
-            "shakecam" => Ok(AssetType::ResShakeCam),
-            "xsoundbank" => Ok(AssetType::ResXSoundbank),
+            "texture" => Ok(AssetType::Texture),
+            "anim" => Ok(AssetType::Anim),
+            "animevents" => Ok(AssetType::AnimEvents),
+            "actorgoals" => Ok(AssetType::ActorGoals),
+            "unknown3" => Ok(AssetType::Unknown3),
+            "model" => Ok(AssetType::Model),
+            "animevent" => Ok(AssetType::AnimEvents),
+            "cutscene" => Ok(AssetType::Cutscene),
+            "cutsceneevents" => Ok(AssetType::CutsceneEvents),
+            "misc" => Ok(AssetType::Misc),
+            "actorgoal" => Ok(AssetType::ActorGoals),
+            "marker" => Ok(AssetType::Marker),
+            "callout" => Ok(AssetType::FxCallout),
+            "aidlist" => Ok(AssetType::AidList),
+            "loctext" => Ok(AssetType::Loctext),
+            "soundbank" => Ok(AssetType::XSoundbank),
+            "dsp" => Ok(AssetType::XDSP),
+            "cue" => Ok(AssetType::XCueList),
+            "font" => Ok(AssetType::Font),
+            "ghoulybox" => Ok(AssetType::Ghoulybox),
+            "ghoulyspawn" => Ok(AssetType::Ghoulyspawn),
+            "script" => Ok(AssetType::Script),
+            "actorattribs" => Ok(AssetType::ActorAttribs),
+            "fxemitter" => Ok(AssetType::Emitter),
+            "fxparticle" => Ok(AssetType::Particle),
+            "fxrumble" => Ok(AssetType::Rumble),
+            "shakecam" => Ok(AssetType::ShakeCam),
+            "xsoundbank" => Ok(AssetType::XSoundbank),
             _ => Err(AssetError::TypeMismatch),
         }
     }

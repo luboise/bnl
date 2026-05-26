@@ -17,6 +17,8 @@ use std::{cmp, fmt::Display};
 
 use crate::asset::DataViewList;
 
+pub type Error = Box<dyn std::error::Error>;
+
 pub mod game;
 pub mod modding;
 pub mod xsb;

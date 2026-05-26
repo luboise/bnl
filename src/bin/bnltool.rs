@@ -5,7 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use bnl::{BNLFile, RawAsset, asset::AssetType};
+use bnl::{BNLFile, asset::AssetType};
 use clap::{Parser, Subcommand};
 use walkdir::WalkDir;
 
@@ -164,16 +164,19 @@ fn main() {
                             );
                         });
 
-                    std::fs::write(asset_path.join("descriptor"), raw_asset.descriptor_bytes())
-                        .unwrap_or_else(|e| {
-                            eprintln!(
-                                "Unable to write descriptor for {}\nError: {}",
-                                &raw_asset.name(),
-                                e
-                            );
-                        });
+                    std::fs::write(
+                        asset_path.join("descriptor"),
+                        raw_asset.data.descriptor_bytes(),
+                    )
+                    .unwrap_or_else(|e| {
+                        eprintln!(
+                            "Unable to write descriptor for {}\nError: {}",
+                            &raw_asset.name(),
+                            e
+                        );
+                    });
 
-                    if let Some(data_slices) = raw_asset.resource_chunks() {
+                    if let Some(data_slices) = raw_asset.data.resource_chunks() {
                         data_slices.iter().enumerate().for_each(|(i, slice)| {
                             std::fs::write(asset_path.join(format!("resource{}", i)), slice)
                                 .unwrap_or_else(|e| {
@@ -232,16 +235,20 @@ fn main() {
                 */
             }
 
-            let raw_assets: Vec<RawAsset> = asset_paths
+            let raw_assets = asset_paths
                 .iter()
                 .map(|asset_path| {
                     println!("Reading raw asset from {}", asset_path.display());
-                    RawAsset::from_dir(asset_path).unwrap()
+                    bnl::RawAsset::from_dir(asset_path).unwrap()
                 })
-                .collect();
+                .collect::<Vec<_>>();
 
             for raw_asset in raw_assets {
-                println!("Adding {} to {}", raw_asset.name(), output_file.display());
+                println!(
+                    "Adding {} to {}",
+                    raw_asset.metadata.name(),
+                    output_file.display()
+                );
 
                 bnl.append_raw_asset(raw_asset);
             }
@@ -250,13 +257,21 @@ fn main() {
                 "\nSuccessfully wrote all assets. Outputting to {}",
                 output_file.display()
             );
-            if let Err(e) = fs::write(output_file, bnl.to_bytes()) {
-                eprintln!("Failed to write output bnl file. Error: {}", e);
 
+            let bnl_bytes = match bnl.to_bytes() {
+                Ok(v) => v,
+                Err(e) => {
+                    eprintln!("Failed to serialize bnl to bytes: {e}");
+                    error_exit();
+                }
+            };
+
+            if let Err(e) = fs::write(output_file, bnl_bytes) {
+                eprintln!("Failed to write output bnl file. Error: {}", e);
                 error_exit();
-            } else {
-                println!("\nSuccessfully wrote bnl file.");
             }
+
+            println!("\nSuccessfully wrote bnl file.");
         }
 
         Commands::List {
@@ -291,7 +306,7 @@ fn main() {
                         true
                     }
                 })
-                .collect::<Vec<&RawAsset>>();
+                .collect::<Vec<&bnl::RawAsset>>();
 
             // Sort by asset type
             raw_assets.sort_by_key(|raw| raw.metadata().asset_type);

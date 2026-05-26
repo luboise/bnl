@@ -36,9 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .get_raw_asset(aid)?
                         .to_owned();
 
-                    *raw_asset.descriptor_bytes_mut() = raw_override.descriptor_bytes.clone();
-                    *raw_asset.resource_chunks_mut() =
-                        Some(vec![raw_override.resource_bytes.clone()]);
+                    raw_asset.data = raw_override.data.clone();
 
                     Some(raw_asset)
                 } else {
@@ -91,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|(aid, _)| modification.model_mods.contains_key(*aid))
     {
         let model_mod = modification.model_mods.get(aid).unwrap();
-        model_mod.apply_raw(raw_asset)?;
+        model_mod.apply_raw(&mut raw_asset.data)?;
     }
 
     let mut ctx = bnl::modding::ModContext {
@@ -129,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "Applied {num_applied} modifications to {}",
                 bnl_path.display(),
             );
-            std::fs::write(bnl_path, bnl.to_bytes())?;
+            std::fs::write(bnl_path, bnl.to_bytes()?)?;
         }
     }
 
