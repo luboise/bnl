@@ -1,6 +1,9 @@
 use std::io::{Seek as _, SeekFrom};
 
+use binrw::BinReaderExt;
 use byteorder::{LittleEndian, ReadBytesExt as _};
+
+use super::AssetType;
 
 #[derive(Debug, Clone)]
 pub struct RawFontDescriptor {
@@ -53,12 +56,8 @@ impl FontDescriptor {
     }
 }
 
-// if (entriesStart != 0) {
-// 	FontEntry entries[endGlyph - startGlyph + 1] @ start + entriesStart;
-// }
-
-impl super::AssetDescriptor for FontDescriptor {
-    fn from_bytes(data: &[u8]) -> Result<Self, super::AssetParseError> {
+impl FontDescriptor {
+    fn from_bytes(data: &[u8]) -> Result<Self, crate::Error> {
         let mut cur = std::io::Cursor::new(data);
 
         let raw_descriptor = RawFontDescriptor {
@@ -91,8 +90,7 @@ impl super::AssetDescriptor for FontDescriptor {
             let mut tex_cur = cur.clone();
             tex_cur.seek(SeekFrom::Start(tex_ptr.into()))?;
 
-            let tex_descriptor =
-                crate::asset::texture::TextureDescriptor::from_bytes(&data[tex_ptr as usize..])?;
+            let tex_descriptor = std::io::Cursor::new(&data[tex_ptr as usize..]).read_le()?;
 
             glyphs.push(RawGlyph {
                 glyph_index: raw_descriptor.start_glyph + i,
@@ -111,18 +109,6 @@ impl super::AssetDescriptor for FontDescriptor {
             text_y: raw_descriptor.text_y,
             glyphs,
         })
-    }
-
-    fn size(&self) -> usize {
-        todo!()
-    }
-
-    fn asset_type() -> super::AssetType {
-        super::AssetType::ResFont
-    }
-
-    fn to_bytes(&self) -> Result<Vec<u8>, super::AssetParseError> {
-        todo!()
     }
 }
 
@@ -143,14 +129,19 @@ pub struct Font {
     pub glyphs: Vec<Glyph>,
 }
 
-impl crate::asset::AssetLike for Font {
-    type Descriptor = FontDescriptor;
+impl TryFrom<crate::RawAssetData> for Font {
+    type Error = crate::Error;
 
-    fn new(
-        descriptor: &Self::Descriptor,
-        virtual_res: &crate::VirtualResource,
-    ) -> Result<Self, super::AssetParseError> {
-        let res_bytes = virtual_res.get_all_bytes();
+    fn try_from(value: crate::RawAssetData) -> Result<Self, Self::Error> {
+        let crate::RawAssetData {
+            descriptor_bytes,
+            resource_chunks,
+        } = value;
+
+        let res_bytes = resource_chunks.into_iter().flatten().collect::<Vec<_>>();
+
+        let descriptor = FontDescriptor::from_bytes(&descriptor_bytes)?;
+
         let glyphs = descriptor
             .glyphs
             .iter()
@@ -186,12 +177,16 @@ impl crate::asset::AssetLike for Font {
             glyphs,
         })
     }
+}
 
-    fn get_descriptor(&self) -> Self::Descriptor {
+impl TryFrom<Font> for crate::RawAssetData {
+    type Error = crate::Error;
+
+    fn try_from(_value: Font) -> Result<Self, Self::Error> {
         todo!()
     }
+}
 
-    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
-        todo!()
-    }
+impl super::AssetData for Font {
+    const ASSET_TYPE: AssetType = AssetType::Font;
 }
