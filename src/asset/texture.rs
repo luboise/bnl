@@ -4,12 +4,11 @@ use std::{
     path::Path,
 };
 
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use binrw::{BinReaderExt, BinWrite};
 use image::EncodableLayout;
 
 use crate::{
-    VirtualResource, VirtualResourceError,
-    asset::{AssetDescriptor, AssetLike, AssetParseError, AssetType, Dump},
+    asset::{AssetData, AssetType, Dump},
     d3d::{D3DFormat, PixelBits},
     transcode_image,
 };
@@ -17,6 +16,7 @@ use crate::{
 const TEXTURE_DESCRIPTOR_SIZE: usize = 28;
 
 #[derive(Debug, Clone)]
+#[binrw::binrw]
 pub struct TextureDescriptor {
     pub format: D3DFormat,
     pub header_size: u32, // 0x1c
@@ -188,125 +188,55 @@ impl Dump for Texture {
     }
 }
 
-impl AssetDescriptor for TextureDescriptor {
-    fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError> {
-        if data.len() < TEXTURE_DESCRIPTOR_SIZE {
-            return Err(AssetParseError::InputTooSmall);
+impl TryFrom<crate::RawAssetData> for Texture {
+    type Error = crate::Error;
+
+    fn try_from(value: crate::RawAssetData) -> Result<Self, Self::Error> {
+        let crate::RawAssetData {
+            descriptor_bytes,
+            resource_chunks,
+        } = value;
+
+        if resource_chunks.is_empty() {
+            return Err("texture resource buf is empty".into());
         }
 
-        let mut cur = Cursor::new(data);
-
-        let format = {
-            let format_u32 = cur.read_u32::<LittleEndian>()?;
-
-            D3DFormat::try_from(format_u32).map_err(|_| {
-                eprintln!("unimplemented d3d format: 0x{format_u32:x}");
-                AssetParseError::ErrorParsingDescriptor
-            })
-        }?;
-
-        // println!(
-        //          );
-
-        let header_size = cur.read_u32::<LittleEndian>()?;
-        let width = cur.read_u16::<LittleEndian>()?;
-        let height = cur.read_u16::<LittleEndian>()?;
-        let flags = cur.read_u32::<LittleEndian>()?;
-        let unknown_3a = cur.read_u32::<LittleEndian>()?;
-        let texture_offset = cur.read_u32::<LittleEndian>()?;
-        let texture_size = cur.read_u32::<LittleEndian>()?;
-
-        Ok(TextureDescriptor {
-            format,
-            header_size,
-            width,
-            height,
-            flags,
-            unknown_3a,
-            texture_offset,
-            texture_size,
-        })
-    }
-
-    fn size(&self) -> usize {
-        TEXTURE_DESCRIPTOR_SIZE
-    }
-
-    fn asset_type() -> AssetType {
-        AssetType::ResTexture
-    }
-
-    fn to_bytes(&self) -> Result<Vec<u8>, AssetParseError> {
-        let mut bytes = vec![0x00; TEXTURE_DESCRIPTOR_SIZE];
-
-        let mut cur = Cursor::new(&mut bytes[..]);
-
-        cur.write_u32::<LittleEndian>(self.format as u32)?;
-
-        cur.write_u32::<LittleEndian>(self.header_size)?;
-        cur.write_u16::<LittleEndian>(self.width)?;
-        cur.write_u16::<LittleEndian>(self.height)?;
-        cur.write_u32::<LittleEndian>(self.flags)?;
-        cur.write_u32::<LittleEndian>(self.unknown_3a)?;
-        cur.write_u32::<LittleEndian>(self.texture_offset)?;
-        cur.write_u32::<LittleEndian>(self.texture_size)?;
-
-        Ok(bytes)
-    }
-}
-
-impl AssetLike for Texture {
-    type Descriptor = TextureDescriptor;
-
-    fn new(
-        descriptor: &Self::Descriptor,
-        virtual_res: &VirtualResource,
-    ) -> Result<Self, AssetParseError> {
-        if virtual_res.is_empty() {
-            return Err(AssetParseError::InvalidDataViews(
-                "Unable to create a Texture using 0 data views".to_string(),
-            ));
-        }
+        let descriptor: TextureDescriptor = Cursor::new(&descriptor_bytes).read_le()?;
+        let resource_bytes = resource_chunks.into_iter().flatten().collect::<Vec<_>>();
 
         let offset = descriptor.texture_offset as usize;
         let size = descriptor.texture_size as usize;
 
-        let bytes = match virtual_res.get_bytes(offset, size) {
-            Ok(b) => b,
-            Err(e) => {
-                match e {
-                    VirtualResourceError::OffsetOutOfBounds => {
-                        return Err(AssetParseError::InvalidDataViews(format!(
-                            "Offset {} is out of bounds for virtual resource of size {}",
-                            offset,
-                            virtual_res.len()
-                        )));
-                    }
-
-                    VirtualResourceError::SizeOutOfBounds => {
-                        return Err(AssetParseError::InvalidDataViews(format!(
-                            "Size would reach offset {}, which is out of bounds for virtual resource of size {}",
-                            offset + size,
-                            virtual_res.len()
-                        )));
-                    }
-                };
-            }
-        };
+        let bytes = resource_bytes
+            .get(offset..offset + size)
+            .ok_or_else(|| format!("bad slice {offset}..{}", offset + size))?
+            .to_owned();
 
         Ok(Texture {
             descriptor: descriptor.clone(),
             bytes,
         })
     }
+}
 
-    fn get_descriptor(&self) -> Self::Descriptor {
-        self.descriptor.clone()
-    }
+impl TryFrom<Texture> for crate::RawAssetData {
+    type Error = crate::Error;
 
-    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
-        Some(vec![self.bytes.clone()]) // Single view of the texture bytes
+    fn try_from(value: Texture) -> Result<Self, Self::Error> {
+        let mut descriptor_bytes = vec![];
+        value
+            .descriptor
+            .write_le(&mut Cursor::new(&mut descriptor_bytes));
+
+        Ok(crate::RawAssetData {
+            descriptor_bytes,
+            resource_chunks: vec![value.bytes],
+        })
     }
+}
+
+impl AssetData for Texture {
+    const ASSET_TYPE: AssetType = AssetType::Texture;
 }
 
 #[derive(Clone)]
@@ -416,7 +346,9 @@ mod tests {
             0x00, 0x2B, 0x00, 0x00, // Size
         ];
 
-        let tex_desc = TextureDescriptor::from_bytes(&data).unwrap();
+        let tex_desc = std::io::Cursor::new(data)
+            .read_le::<TextureDescriptor>()
+            .unwrap();
         assert_eq!(tex_desc.format, D3DFormat::DXT1);
         assert_eq!(tex_desc.header_size, 0x1c);
         assert_eq!(tex_desc.width, 0x80);
@@ -438,7 +370,9 @@ mod tests {
             0x00, 0x2B, 0x00, 0x00, // Size
         ];
 
-        let tex_desc = TextureDescriptor::from_bytes(&data).unwrap();
+        let tex_desc = std::io::Cursor::new(data)
+            .read_le::<TextureDescriptor>()
+            .unwrap();
         assert_eq!(tex_desc.format, D3DFormat::DXT1);
         assert_eq!(tex_desc.header_size, 0x1c);
         assert_eq!(tex_desc.width, 0x80);
@@ -452,14 +386,11 @@ mod tests {
         let descriptor_bytes = include_bytes!("test_data/texture0_descriptor");
         let resource_bytes = include_bytes!("test_data/texture0_resource0");
 
-        let desc = TextureDescriptor::from_bytes(descriptor_bytes).map_err(|e| {
-            format!(
-                "Failed to create texture descriptor from test bytes. Error: {}",
-                e
-            )
-        })?;
+        let tex_desc = std::io::Cursor::new(descriptor_bytes)
+            .read_le::<TextureDescriptor>()
+            .unwrap();
 
-        let _tex = Texture::new(desc, resource_bytes.to_vec());
+        let _tex = Texture::new(tex_desc, resource_bytes.to_vec());
 
         Ok(())
     }
