@@ -1,14 +1,14 @@
 use std::{
-    error::Error,
     fs,
     io::{self, Cursor, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
 };
 
+use binrw::BinReaderExt;
 use byteorder::{LittleEndian, ReadBytesExt};
 use serde::Deserialize;
 
-pub fn dump_wav_files(wav_files: &[WavFile], dump_dir: PathBuf) -> Result<(), Box<dyn Error>> {
+pub fn dump_wav_files(wav_files: &[WavFile], dump_dir: PathBuf) -> Result<(), crate::Error> {
     let num_digits = (wav_files.len().checked_ilog10().unwrap_or(0) + 1) as usize;
 
     for (i, wav) in wav_files.iter().enumerate() {
@@ -23,7 +23,7 @@ pub fn dump_wav_files(wav_files: &[WavFile], dump_dir: PathBuf) -> Result<(), Bo
     Ok(())
 }
 
-pub fn wav_files_from_path(path: PathBuf) -> Result<Vec<WavFile>, Box<dyn Error>> {
+pub fn wav_files_from_path(path: PathBuf) -> Result<Vec<WavFile>, crate::Error> {
     let bytes = fs::read(path)?;
 
     let mut cur = Cursor::new(&bytes);
@@ -51,27 +51,14 @@ pub fn wav_files_from_path(path: PathBuf) -> Result<Vec<WavFile>, Box<dyn Error>
 
     let mut wav_files: Vec<WavFile> = vec![];
 
-    let mut raw_wav_entries = vec![RawWavEntry::default(); num_wav_entries as usize];
-
-    // Read wav entries
-    if num_wav_entries != 0 {
+    let raw_wav_entries = if num_wav_entries == 0 {
+        Default::default()
+    } else {
         cur.seek(SeekFrom::Start(header.wav_entries_ptr as u64))?;
-
-        for i in 0..num_wav_entries as usize {
-            let raw_entry = RawWavEntry {
-                unknown_1: cur.read_u32::<LittleEndian>()?,
-
-                raw_format: cur.read_u32::<LittleEndian>()?,
-
-                bytes_ptr: cur.read_u32::<LittleEndian>()?,
-                num_bytes: cur.read_u32::<LittleEndian>()?,
-                unknown_2: cur.read_u32::<LittleEndian>()?,
-                unknown_3: cur.read_u32::<LittleEndian>()?,
-            };
-
-            raw_wav_entries[i] = raw_entry;
-        }
-    }
+        (0..num_wav_entries as usize)
+            .map(|_| Ok(cur.read_le()?))
+            .collect::<Result<Vec<RawWavEntry>, crate::Error>>()?
+    };
 
     wav_files.resize(raw_wav_entries.len(), Default::default());
 
@@ -221,6 +208,9 @@ impl WaveBankMiniWaveFormat3 {
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
+#[binrw::binrw]
+#[br(little)]
+#[bw(little)]
 pub(crate) struct RawWavEntry {
     unknown_1: u32,
 
