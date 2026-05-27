@@ -221,7 +221,9 @@ impl PixelBits for StandardFormat {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-#[repr(u32)]
+#[binrw::binrw]
+#[br(repr = u32)]
+#[bw(repr = u32)]
 pub enum D3DFormat {
     DXT1 = 0x0c,
     DXT2_3 = 0x0e,

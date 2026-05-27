@@ -8,18 +8,15 @@ use std::{
     io::{Cursor, Seek, SeekFrom},
 };
 
-use binrw::{BinRead, BinReaderExt, binrw};
+use binrw::{BinRead, BinReaderExt, BinWrite, binrw};
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
-use crate::{
-    VirtualResource,
-    asset::{
-        AssetDescriptor, AssetLike, AssetParseError, AssetType,
-        model::{sub_colliders::CollisionSubresource, sub_main::ModelSubresource},
-        texture::{Texture, TextureDescriptor},
-    },
+use crate::asset::{
+    AssetData, AssetParseError, AssetType,
+    model::{sub_colliders::CollisionSubresource, sub_main::ModelSubresource},
+    texture::{Texture, TextureDescriptor},
 };
 
 #[derive(Debug)]
@@ -117,8 +114,8 @@ impl ModelDescriptor {
     }
 }
 
-impl AssetDescriptor for ModelDescriptor {
-    fn from_bytes(data: &[u8]) -> Result<Self, AssetParseError> {
+impl ModelDescriptor {
+    fn from_bytes(data: &[u8]) -> Result<Self, crate::Error> {
         let RawModelDescriptor {
             footer_ptr: _,
             footer_entries,
@@ -132,11 +129,11 @@ impl AssetDescriptor for ModelDescriptor {
         let data_size = data.len() as u32;
 
         if data_size < size_of::<ModelDescriptor>() as u32 {
-            return Err(AssetParseError::InputTooSmall);
+            return Err("data smaller than ModelDescriptor".into());
         }
 
         if data_size < 8 {
-            return Err(AssetParseError::InputTooSmall);
+            return Err(AssetParseError::InputTooSmall.into());
         }
 
         let mut model_subresource = None;
@@ -157,7 +154,10 @@ impl AssetDescriptor for ModelDescriptor {
 
                     for _ in 0..texture_list_count {
                         let ptr = cur.read_u32::<LittleEndian>()? as usize;
-                        texture_subresource.push(TextureDescriptor::from_bytes(&data[ptr..])?);
+                        texture_subresource.push(
+                            Cursor::new(&data.get(ptr..).ok_or("unable to get tex subres bytes")?)
+                                .read_le()?,
+                        );
                     }
                 }
                 ModelSubresType::Mesh => {
@@ -220,7 +220,7 @@ impl AssetDescriptor for ModelDescriptor {
             };
         }
 
-        Ok(ModelDescriptor {
+        Ok(Self {
             flags,
             unknown_u32_1,
             unknown_u32_2,
@@ -230,64 +230,62 @@ impl AssetDescriptor for ModelDescriptor {
             collision_subresource,
         })
     }
-
-    fn to_bytes(&self) -> Result<Vec<u8>, AssetParseError> {
-        todo!()
-    }
-
-    fn size(&self) -> usize {
-        todo!()
-    }
-
-    fn asset_type() -> AssetType {
-        AssetType::ResModel
-    }
 }
 
-impl AssetLike for Model {
-    type Descriptor = ModelDescriptor;
+impl TryFrom<crate::RawAssetData> for Model {
+    type Error = crate::Error;
 
-    fn new(
-        descriptor: &Self::Descriptor,
-        virtual_res: &VirtualResource,
-    ) -> Result<Self, AssetParseError> {
-        if virtual_res.is_empty() {
-            return Err(AssetParseError::InvalidDataViews(
-                "Unable to create a Model using 0 data views".to_string(),
-            ));
+    fn try_from(value: crate::RawAssetData) -> Result<Self, Self::Error> {
+        let crate::RawAssetData {
+            descriptor_bytes,
+            resource_chunks,
+        } = value;
+
+        let descriptor = ModelDescriptor::from_bytes(&descriptor_bytes)?;
+
+        let resource = resource_chunks.into_iter().flatten().collect::<Vec<_>>();
+
+        if resource.is_empty() {
+            return Err("no resource for model".into());
         }
 
         let mut model = Model {
             descriptor: descriptor.clone(),
             textures: vec![],
-            resource: virtual_res.get_all_bytes(),
+            resource: resource.clone(),
         };
 
         for subtex_desc in &model.descriptor.texture_subresource {
-            model.textures.push(Texture::new(
-                subtex_desc.clone(),
-                virtual_res
-                    .get_bytes(
+            let subres_bytes = resource
+                .get(subtex_desc.texture_offset as usize..subtex_desc.texture_size as usize)
+                .ok_or_else(|| {
+                    format!(
+                        "failed to get model tex resource [{}..{}] in subres of size {}",
                         subtex_desc.texture_offset as usize,
                         subtex_desc.texture_size as usize,
+                        resource.len()
                     )
-                    .map_err(|e| {
-                        AssetParseError::InvalidDataViews(
-                            format!("Unable to get section of Virtual Resource required for texture. Error: {}", e)
-                        )
-                    })?,
-            ));
+                })?
+                .to_vec();
+
+            model
+                .textures
+                .push(Texture::new(subtex_desc.clone(), subres_bytes));
         }
         Ok(model)
     }
+}
 
-    fn get_descriptor(&self) -> Self::Descriptor {
-        self.descriptor.clone()
-    }
+impl TryFrom<Model> for crate::RawAssetData {
+    type Error = crate::Error;
 
-    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
-        Some(vec![self.resource.clone()])
+    fn try_from(_value: Model) -> Result<Self, Self::Error> {
+        todo!()
     }
+}
+
+impl AssetData for Model {
+    const ASSET_TYPE: AssetType = AssetType::Model;
 }
 
 impl Model {
@@ -376,9 +374,12 @@ impl TexturedModel {
                     let textures = texture_ptrs
                         .into_iter()
                         .map(|texture_ptr| {
-                            let descriptor = TextureDescriptor::from_bytes(
-                                &chunk[(texture_ptr - base).try_into()?..],
-                            )?;
+                            let descriptor = std::io::Cursor::new(
+                                &chunk
+                                    .get((texture_ptr - base).try_into()?..)
+                                    .ok_or_else(|| "unable to get tex descriptor")?,
+                            )
+                            .read_le::<TextureDescriptor>()?;
 
                             let start = descriptor.texture_offset.try_into()?;
                             let end = start + usize::try_from(descriptor.texture_size)?;
@@ -619,11 +620,17 @@ impl TexturesSubresource {
             descriptor.texture_size = texture.bytes().len().try_into()?;
 
             resource_bytes.extend_from_slice(texture.bytes());
-            let mut bytes = descriptor.to_bytes()?;
 
-            if bytes.len() < 0x40 {
-                bytes.resize(0x40, 0u8);
-            }
+            let bytes = {
+                let mut bytes = vec![];
+                descriptor.write_le(&mut Cursor::new(&mut bytes))?;
+
+                if bytes.len() < 0x40 {
+                    bytes.resize(0x40, 0u8);
+                }
+
+                bytes
+            };
 
             descriptor_bytes.extend_from_slice(&bytes);
         }
