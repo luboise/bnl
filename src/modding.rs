@@ -7,11 +7,7 @@ use std::{
 
 use crate::{
     BNLFile,
-    asset::{
-        AssetDescriptor, AssetLike, AssetParseError, AssetType, Parse,
-        aidlist::AidList,
-        model::{TexturedModel, TexturedModelSubresource},
-    },
+    asset::{AssetType, Parse, aidlist::AidList},
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -43,86 +39,24 @@ pub struct ModContext {
 #[derive(Debug, Clone)]
 pub struct RawAssetOverride {
     pub asset_type: AssetType,
-    pub descriptor_bytes: Vec<u8>,
-    pub resource_bytes: Vec<u8>,
-}
-
-#[derive(Debug)]
-pub enum ModErrorType {
-    SpecificationError,
-    AssetOverrideError,
-}
-
-impl std::fmt::Display for ModErrorType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{}",
-            match self {
-                Self::SpecificationError => "SpecificationError",
-                Self::AssetOverrideError => "AssetOverrideError",
-            }
-        )
-    }
-}
-
-#[derive(Debug)]
-pub struct ModError {
-    error_type: ModErrorType,
-    details: String,
-}
-
-impl std::fmt::Display for ModError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.error_type, self.details)
-    }
-}
-
-impl std::error::Error for ModError {}
-
-impl From<io::Error> for ModError {
-    fn from(value: io::Error) -> Self {
-        Self {
-            error_type: ModErrorType::SpecificationError,
-            details: format!("IO Error: {value}"),
-        }
-    }
-}
-
-impl From<AssetParseError> for ModError {
-    fn from(_: AssetParseError) -> Self {
-        Self {
-            error_type: ModErrorType::SpecificationError,
-            details: "Unable to parse asset.".to_string(),
-        }
-    }
+    pub data: crate::RawAssetData,
 }
 
 pub trait ModLike: Sized {
-    type Descriptor: AssetDescriptor;
+    type AssetDataType: TryFrom<crate::RawAssetData, Error = crate::Error>
+        + TryInto<crate::RawAssetData, Error = crate::Error>;
 
-    fn apply_raw(&self, raw_asset: &mut crate::RawAsset) -> Result<(), Box<dyn std::error::Error>> {
-        let mut desc = Self::Descriptor::from_bytes(raw_asset.descriptor_bytes())?;
+    fn apply_raw(&self, raw_asset: &mut crate::RawAssetData) -> Result<(), crate::Error> {
+        let mut data = Self::AssetDataType::try_from(raw_asset.clone())?;
 
-        let mut resource = raw_asset.resource().unwrap_or_default();
-
-        self.apply(&mut desc, &mut resource)?;
-
-        raw_asset.descriptor_bytes = desc.to_bytes()?;
-        raw_asset.resource_chunks = if resource.is_empty() {
-            None
-        } else {
-            Some(vec![resource])
-        };
+        self.apply(&mut data)?;
+        *raw_asset = data.try_into()?;
 
         Ok(())
     }
 
-    fn apply(
-        &self,
-        descriptor: &mut Self::Descriptor,
-        resource: &mut Vec<u8>,
-    ) -> Result<(), Box<dyn std::error::Error>>;
+    fn apply(&self, asset_data: &mut Self::AssetDataType)
+    -> Result<(), Box<dyn std::error::Error>>;
 
     fn from_dir(dir: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>>;
 }
@@ -152,7 +86,7 @@ impl Mod {
     }
 
     /// Reads a mod on disk from a path
-    pub fn from_dir(mod_dir: impl AsRef<Path>) -> Result<Mod, ModError> {
+    pub fn from_dir(mod_dir: impl AsRef<Path>) -> Result<Mod, crate::Error> {
         // Locate dirs
         let root_dir = fs::read_dir(&mod_dir)?
             .map(|res| res.map(|e| e.path()))
@@ -161,32 +95,21 @@ impl Mod {
         let mod_root_file = root_dir
             .iter()
             .find(|file| file.is_file() && file.file_name().unwrap_or_default() == "mod.json")
-            .ok_or(ModError {
-                error_type: ModErrorType::SpecificationError,
-                details: format!(
-                    "Unable to find root mod.json file in {}",
-                    mod_dir.as_ref().display()
-                ),
-            })?;
+            .ok_or(format!(
+                "Unable to find root mod.json file in {}",
+                mod_dir.as_ref().display()
+            ))?;
 
-        // TODO: Clean up this ugly ModError
-        let spec: ModSpecification =
-            serde_json::from_slice(&fs::read(mod_root_file)?).map_err(|e| ModError {
-                error_type: ModErrorType::SpecificationError,
-                details: e.to_string(),
-            })?;
+        let spec: ModSpecification = serde_json::from_slice(&fs::read(mod_root_file)?)?;
 
         let raw_override_dirs = fs::read_dir(
             root_dir
                 .iter()
                 .find(|dir| dir.is_dir() && dir.file_name().unwrap_or_default() == "raw_overrides")
-                .ok_or(ModError {
-                    error_type: ModErrorType::SpecificationError,
-                    details: format!(
-                        "Unable to find raw_overrides directory in {}",
-                        mod_dir.as_ref().display()
-                    ),
-                })?,
+                .ok_or(format!(
+                    "Unable to find raw_overrides directory in {}",
+                    mod_dir.as_ref().display()
+                ))?,
         )?
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, io::Error>>()
@@ -198,13 +121,10 @@ impl Mod {
                 .find(|dir| {
                     dir.is_dir() && dir.file_name().unwrap_or_default() == "global_overrides"
                 })
-                .ok_or(ModError {
-                    error_type: ModErrorType::SpecificationError,
-                    details: format!(
-                        "Unable to find global_overrides directory in {}",
-                        mod_dir.as_ref().display()
-                    ),
-                })?,
+                .ok_or(format!(
+                    "Unable to find global_overrides directory in {}",
+                    mod_dir.as_ref().display()
+                ))?,
         )?
         .map(|res| res.map(|e| e.path()))
         .collect::<Result<Vec<_>, io::Error>>()?;
@@ -223,61 +143,53 @@ impl Mod {
 
                 let override_aid = raw_override_dir
                     .file_name()
-                    .ok_or(ModError {
-                        error_type: ModErrorType::SpecificationError,
-                        details: "Failed to retrieve file name from dir.".to_string(),
-                    })?
+                    .ok_or("Failed to retrieve file name from dir.")?
                     .to_str()
-                    .ok_or(ModError {
-                        error_type: ModErrorType::SpecificationError,
-                        details: format!(
-                            "Failed to convert path {} to str.",
-                            raw_override_dir.display()
-                        ),
-                    })?;
+                    .ok_or(format!(
+                        "Failed to convert path {} to str.",
+                        raw_override_dir.display()
+                    ))?;
 
                 let Some((_, [raw_asset_type, _asset_category, _asset_entry])) =
                     re.captures(override_aid).map(|caps| caps.extract())
                 else {
-                    return Err(ModError {
-                        error_type: ModErrorType::SpecificationError,
-                        details: format!(
-                            "Asset name {override_aid} did not match AID regex (aid_[TYPE]_[CATEGORY]_[ENTRY]).",
-                        ),
-                    });
+                    return Err(format!(
+                        "Asset name {override_aid} did not match AID regex (aid_[TYPE]_[CATEGORY]_[ENTRY]).",
+                    ).into());
                 };
 
-                let asset_type = AssetType::try_from(raw_asset_type).map_err(|_| ModError {
-                    error_type: ModErrorType::SpecificationError,
-                    details: format!(
+                let asset_type = AssetType::try_from(raw_asset_type).map_err(|_| {
+                    format!(
                         "Asset type {} does not match any known type.",
                         raw_asset_type
-                    ),
+                    )
                 })?;
 
-                let descriptor_bytes = std::fs::read(raw_override_dir.join("descriptor"))?;
+                let data = {
+                    let descriptor_bytes = std::fs::read(raw_override_dir.join("descriptor"))?;
 
-                let resource_bytes = {
-                    if let Ok(res) = std::fs::read(raw_override_dir.join("resource")) {
-                        res
-                    } else {
-                        // TODO: Make this read multiple resource chunks
-                        std::fs::read(raw_override_dir.join("resource0")).unwrap_or_default()
+                    let resource_bytes = {
+                        if let Ok(res) = std::fs::read(raw_override_dir.join("resource")) {
+                            res
+                        } else {
+                            // TODO: Make this read multiple resource chunks
+                            std::fs::read(raw_override_dir.join("resource0")).unwrap_or_default()
+                        }
+                    };
+
+                    crate::RawAssetData {
+                        descriptor_bytes,
+                        resource_chunks: vec![resource_bytes],
                     }
                 };
 
                 if let Some(_existing) = raw_asset_overrides.insert(
                     override_aid.to_owned(),
-                    RawAssetOverride {
-                        asset_type,
-                        descriptor_bytes,
-                        resource_bytes,
-                    },
+                    RawAssetOverride { asset_type, data },
                 ) {
-                    return Err(ModError {
-                        error_type: ModErrorType::AssetOverrideError,
-                        details: format!("Asset {override_aid} has already been overwritten."),
-                    });
+                    return Err(
+                        format!("Asset {override_aid} has already been overwritten.").into(),
+                    );
                 }
             }
         }
@@ -289,68 +201,52 @@ impl Mod {
 
             let override_aid = override_dir
                 .file_name()
-                .ok_or(ModError {
-                    error_type: ModErrorType::SpecificationError,
-                    details: "Failed to retrieve file name from dir.".to_string(),
-                })?
+                .ok_or("Failed to retrieve file name from dir.".to_owned())?
                 .to_str()
-                .ok_or(ModError {
-                    error_type: ModErrorType::SpecificationError,
-                    details: format!("Failed to convert path {} to str.", override_dir.display()),
-                })?;
+                .ok_or(format!(
+                    "Failed to convert path {} to str.",
+                    override_dir.display()
+                ))?;
 
             // eg. aid_aidlist_ghoulies_sceneorder_game
-
             let Some((_, [raw_asset_type, _asset_category, _asset_entry])) =
                 re.captures(override_aid).map(|caps| caps.extract())
             else {
-                return Err(ModError {
-                    error_type: ModErrorType::SpecificationError,
-                    details: format!(
+                return Err(
+                     format!(
                         "Asset name {override_aid} did not match AID regex (aid_[TYPE]_[CATEGORY]_[GROUP]_[ENTRY]).",
-                    ),
-                });
+                    ).into());
             };
 
-            let asset_type = AssetType::try_from(raw_asset_type).map_err(|_| ModError {
-                error_type: ModErrorType::SpecificationError,
-                details: format!(
+            let asset_type = AssetType::try_from(raw_asset_type).map_err(|_| {
+                format!(
                     "Asset type {} does not match any known type.",
                     raw_asset_type
-                ),
+                )
             })?;
 
             let asset_override: Option<(String, RawAssetOverride)> = match asset_type {
-                AssetType::ResAidList => {
+                AssetType::AidList => {
                     let aid_list = AidList::parse(override_dir.join("override.txt"))?;
+
                     Some((
                         override_aid.to_string(),
                         RawAssetOverride {
-                            asset_type: AssetType::ResAidList,
-                            descriptor_bytes: aid_list.get_descriptor().to_bytes()?,
-                            resource_bytes: vec![],
+                            asset_type: AssetType::AidList,
+                            data: aid_list.try_into()?,
                         },
                     ))
                 }
-                AssetType::ResCutscene => {
+                AssetType::Cutscene => {
                     cutscene_mods.insert(
                         override_aid.to_string(),
-                        CutsceneMod::from_dir(&override_dir).map_err(|e| ModError {
-                            error_type: ModErrorType::AssetOverrideError,
-                            details: e.to_string(),
-                        })?,
+                        CutsceneMod::from_dir(&override_dir)?,
                     );
 
                     None
                 }
-                AssetType::ResModel => {
-                    model_mods.insert(
-                        override_aid.to_string(),
-                        ModelMod::from_dir(&override_dir).map_err(|e| ModError {
-                            error_type: ModErrorType::AssetOverrideError,
-                            details: e.to_string(),
-                        })?,
-                    );
+                AssetType::Model => {
+                    model_mods.insert(override_aid.to_string(), ModelMod::from_dir(&override_dir)?);
                     None
                 }
                 _ => None, //
@@ -386,10 +282,7 @@ impl Mod {
             if let Some((name, asset_override)) = asset_override
                 && let Some(_existing) = raw_asset_overrides.insert(name, asset_override)
             {
-                return Err(ModError {
-                    error_type: ModErrorType::AssetOverrideError,
-                    details: format!("Asset {override_aid} has already been overwritten."),
-                });
+                return Err(format!("Asset {override_aid} has already been overwritten.").into());
             }
         }
 
@@ -479,15 +372,14 @@ pub struct CutsceneMod {
 }
 
 impl crate::modding::ModLike for CutsceneMod {
-    type Descriptor = crate::asset::cutscene::CutsceneDescriptor;
+    type AssetDataType = crate::asset::cutscene::Cutscene;
 
     fn apply(
         &self,
-        descriptor: &mut Self::Descriptor,
-        _resource: &mut Vec<u8>,
+        asset_data: &mut Self::AssetDataType,
     ) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(length) = self.length {
-            descriptor.length = length;
+            asset_data.length = length;
         }
 
         Ok(())
@@ -505,18 +397,20 @@ pub struct ModelMod {
 }
 
 impl crate::modding::ModLike for ModelMod {
-    type Descriptor = crate::asset::model::ModelDescriptor;
+    type AssetDataType = crate::asset::model::Model;
 
     fn apply(
         &self,
-        _descriptor: &mut Self::Descriptor,
-        _resource: &mut Vec<u8>,
+        _asset_data: &mut Self::AssetDataType,
     ) -> Result<(), Box<dyn std::error::Error>> {
         todo!("ModelMod::apply unimplemented, use apply_raw");
     }
 
-    fn apply_raw(&self, raw_asset: &mut crate::RawAsset) -> Result<(), Box<dyn std::error::Error>> {
-        let mut tm = TexturedModel::new(
+    fn apply_raw(
+        &self,
+        raw_asset: &mut crate::RawAssetData,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut tm = crate::asset::model::TexturedModel::new(
             &raw_asset.descriptor_bytes,
             &raw_asset
                 .resource()
@@ -524,7 +418,7 @@ impl crate::modding::ModLike for ModelMod {
         )?;
 
         for (index, new_texture) in &self.textures {
-            let Some(TexturedModelSubresource::Textures(texture_subres)) = tm
+            let Some(crate::asset::model::TexturedModelSubresource::Textures(texture_subres)) = tm
                 .subresources
                 .get_mut(&crate::asset::model::ModelSubresType::Texture)
             else {
@@ -542,7 +436,7 @@ impl crate::modding::ModLike for ModelMod {
         let (desc, res) = tm.serialize()?;
 
         raw_asset.descriptor_bytes = desc;
-        raw_asset.resource_chunks = Some(vec![res]);
+        raw_asset.resource_chunks = vec![res];
 
         Ok(())
     }
