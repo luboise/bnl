@@ -15,7 +15,6 @@ pub(crate) mod prelude {
     pub use super::ModelSlice;
     pub use crate::asset::AssetParseError;
     pub use crate::asset::model::gltf::NdGltfContext;
-    pub use crate::asset::model::nd::NdNode;
 
     pub use super::NdError;
 

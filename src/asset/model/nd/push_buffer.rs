@@ -42,9 +42,9 @@ impl NdPushBufferData {
 
     pub fn create_gltf_node(
         &self,
-        _virtual_res: &VirtualResource,
+        _virtual_res: &[u8],
         ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
+    ) -> Result<Option<GltfIndex>, crate::Error> {
         // let mut mesh = gltf::Mesh::new("Idk Mesh".to_string());
 
         let index_buffer: &Vec<u8> = &self.buffer_bytes;

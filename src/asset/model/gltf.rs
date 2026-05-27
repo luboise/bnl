@@ -5,16 +5,13 @@ use std::{
 
 use gltf_writer::gltf::{self, Gltf, GltfIndex, serialisation::GltfExportType};
 
-use crate::{
-    VirtualResource,
-    asset::{
-        AssetLike, AssetParseError, Dump,
-        model::{
-            ModelDescriptor,
-            nd::{Nd, NdData, res_view::VertexBufferViewType},
-        },
-        texture::Texture,
+use crate::asset::{
+    AssetParseError, Dump,
+    model::{
+        ModelDescriptor,
+        nd::{Nd, NdData, res_view::VertexBufferViewType},
     },
+    texture::Texture,
 };
 
 #[derive(Debug)]
@@ -100,32 +97,33 @@ impl NdGltfContext {
     }
 }
 
-impl AssetLike for GLTFModel {
-    type Descriptor = ModelDescriptor;
+impl TryFrom<crate::RawAssetData> for GLTFModel {
+    type Error = crate::Error;
 
-    fn get_descriptor(&self) -> Self::Descriptor {
-        self.descriptor.clone()
-    }
+    fn try_from(value: crate::RawAssetData) -> Result<Self, Self::Error> {
+        let crate::RawAssetData {
+            descriptor_bytes,
+            resource_chunks,
+        } = value;
 
-    fn new(
-        descriptor: &Self::Descriptor,
-        virtual_res: &VirtualResource,
-    ) -> Result<Self, AssetParseError> {
+        let resource = resource_chunks.into_iter().flatten().collect::<Vec<_>>();
+
+        let descriptor = ModelDescriptor::from_bytes(&descriptor_bytes)?;
+
         let mut gltf = Gltf::default();
 
         // Load all textures first, because we need to assign them based on index
         for (i, tex_desc) in descriptor.texture_subresource.iter().enumerate() {
-            let image_bytes = virtual_res
-                .get_bytes(
-                    tex_desc.texture_offset as usize,
-                    tex_desc.texture_size as usize,
+            let image_bytes = resource
+                .get(
+                    tex_desc.texture_offset as usize
+                        ..(tex_desc.texture_offset + tex_desc.texture_size) as usize,
                 )
-                .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
+                .ok_or_else(|| "bad tex offset")?
+                .to_vec();
 
             let tex = Texture::new(tex_desc.clone(), image_bytes);
-            let rgba_image = tex
-                .to_rgba_image()
-                .map_err(|_| AssetParseError::ErrorParsingDescriptor)?;
+            let rgba_image = tex.to_rgba_image()?;
 
             let mut png = vec![];
             rgba_image
@@ -176,7 +174,7 @@ impl AssetLike for GLTFModel {
             for nd in &mesh_desc.primitives {
                 println!("FOUND ND");
 
-                if let Some(new_index) = insert_into_gltf_heirarchy(nd, virtual_res, &mut ctx)? {
+                if let Some(new_index) = insert_into_gltf_heirarchy(nd, &resource, &mut ctx)? {
                     scene.add_node(new_index);
                 }
             }
@@ -192,22 +190,17 @@ impl AssetLike for GLTFModel {
             gltf: ctx.gltf,
         })
     }
-
-    fn get_resource_chunks(&self) -> Option<Vec<Vec<u8>>> {
-        // TODO: Create this function
-        todo!();
-    }
 }
 
 pub fn create_gltf_node(
     nd: &Nd,
-    virtual_res: &VirtualResource,
+    resource: &[u8],
     ctx: &mut NdGltfContext,
-) -> Result<Option<GltfIndex>, AssetParseError> {
+) -> Result<Option<GltfIndex>, crate::Error> {
     match nd.data.as_ref() {
         NdData::Skeleton { bones } => {
             if ctx.current_skin.is_some() {
-                return Err(AssetParseError::ErrorParsingDescriptor);
+                return Err("no skin during pass".into());
             }
 
             let skeleton_index = ctx
@@ -222,15 +215,11 @@ pub fn create_gltf_node(
             for (i, bone) in bones.iter().enumerate().skip(1) {
                 // If bone doesn't match expected index
                 if bone.id as usize != i {
-                    return Err(AssetParseError::InvalidDataViews(format!(
-                        "Bone mismatch (expected {i}, got {})",
-                        bone.id
-                    )));
+                    return Err(format!("Bone mismatch (expected {i}, got {})", bone.id).into());
                 }
 
-                // If the parent doesn't exist
                 if bone.parent_id as usize >= new_skin.joints.len() {
-                    return Err(AssetParseError::ErrorParsingDescriptor);
+                    return Err("parent bone doesn't exist".into());
                 }
 
                 let mut bone_node = gltf::Node::new(Some(
@@ -284,9 +273,9 @@ pub fn create_gltf_node(
 
             let res_size = (max - min) as usize;
 
-            let res_bytes = virtual_res
-                .get_bytes(min as usize, res_size)
-                .map_err(|e| AssetParseError::InvalidDataViews(e.to_string()))?;
+            let res_bytes = resource
+                .get(min as usize..min as usize + res_size)
+                .ok_or_else(|| "bad model vertex")?;
 
             let gb = gltf::Buffer::new(&res_bytes);
             let buffer_index = ctx.gltf.add_buffer(gb);
@@ -356,7 +345,7 @@ pub fn create_gltf_node(
             Ok(None)
         }
         NdData::PushBuffer(nd_push_buffer_data) => {
-            nd_push_buffer_data.create_gltf_node(virtual_res, ctx)
+            nd_push_buffer_data.create_gltf_node(resource, ctx)
 
             // TODO: Figure out whats up with these
             // insert_into_gltf_heirarchy(nd, virtual_res, ctx)
@@ -367,7 +356,7 @@ pub fn create_gltf_node(
             unknown_ptr_1: _,
             unknown_ptr_2: _,
         } => {
-            push_buffer.create_gltf_node(virtual_res, ctx)
+            push_buffer.create_gltf_node(resource, ctx)
             // insert_into_gltf_heirarchy(nd, virtual_res, ctx)
             // push_buffer.insert_into_gltf_heirarchy(virtual_res, ctx)
         }
@@ -432,9 +421,9 @@ pub fn create_gltf_node(
 
 pub fn insert_into_gltf_heirarchy(
     nd: &Nd,
-    virtual_res: &VirtualResource,
+    virtual_res: &[u8],
     ctx: &mut NdGltfContext,
-) -> Result<Option<GltfIndex>, AssetParseError> {
+) -> Result<Option<GltfIndex>, crate::Error> {
     let node_index_opt = create_gltf_node(nd, virtual_res, ctx)?;
 
     let type_string = nd.nd_type().to_string();
