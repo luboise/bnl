@@ -1,3 +1,5 @@
+use std::io::{Read, Seek, SeekFrom};
+
 use super::prelude::*;
 
 use indexmap::IndexMap;
@@ -134,7 +136,7 @@ pub struct NdShaderParam2Payload {
 
 impl NdShaderParam2Payload {
     pub fn from_model_slice(model_slice: &ModelSlice) -> Result<Self, NdError> {
-        let mut cur = Cursor::new(model_slice.slice);
+        let mut cur = std::io::Cursor::new(model_slice.slice);
 
         cur.seek(SeekFrom::Start(model_slice.read_start as u64))?;
 

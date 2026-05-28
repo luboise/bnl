@@ -7,26 +7,19 @@ pub use push_buffer::{DrawCall, NdPushBufferData};
 pub use vertex_buffer::*;
 
 pub(crate) mod prelude {
-    // External
-    pub use gltf_writer::gltf::{self, GltfIndex};
     pub use serde::{Serialize, ser::SerializeMap};
 
     // Internal
     pub use super::ModelSlice;
-    pub use crate::asset::AssetParseError;
-    pub use crate::asset::model::gltf::NdGltfContext;
 
     pub use super::NdError;
 
-    pub(crate) use crate::VirtualResource;
     pub(crate) use byteorder::{LittleEndian, ReadBytesExt};
-    pub(crate) use std::io::{Cursor, Read, Seek, SeekFrom};
 }
 
 use std::{
     collections::{HashMap, VecDeque},
-    io::{self},
-    iter::{self},
+    io::{Read, Seek, SeekFrom},
 };
 
 use serde::{Serialize, ser::SerializeMap};
@@ -41,18 +34,10 @@ pub enum NdError {
     CreationFailure(String),
 }
 
-impl From<io::Error> for NdError {
-    fn from(e: io::Error) -> Self {
+impl From<std::io::Error> for NdError {
+    fn from(e: std::io::Error) -> Self {
         Self::CreationFailure(e.to_string())
     }
-}
-
-pub trait NdNode {
-    fn add_gltf_node(
-        &self,
-        virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError>;
 }
 
 /*
@@ -100,14 +85,14 @@ impl Nd {
         bytes: &[u8],
         nd_start_offset: u32,
     ) -> Result<Nd, NdError> {
-        let mut cur = Cursor::new(bytes);
+        let mut cur = std::io::Cursor::new(bytes);
 
         cur.seek(SeekFrom::Start(nd_start_offset as u64))?;
 
         let name_ptr = cur.read_u32::<LittleEndian>()?;
 
         // TODO: Sanity check name against name ptr
-        let (type_u16, unknown_u16) = (
+        let (_type_u16, unknown_u16) = (
             cur.read_u16::<LittleEndian>()?,
             cur.read_u16::<LittleEndian>()?,
         );
@@ -384,7 +369,7 @@ impl Nd {
     }
 
     pub fn children(&self) -> impl Iterator<Item = &Nd> {
-        iter::successors(self.first_child(), |nd| nd.next_sibling())
+        std::iter::successors(self.first_child(), |nd| nd.next_sibling())
     }
 
     pub fn first_child(&self) -> Option<&Nd> {
@@ -589,32 +574,13 @@ impl<'a> ModelSlice<'a> {
         }
     }
 
-    pub fn new_cursor(&self) -> Cursor<&[u8]> {
-        let mut cur = Cursor::new(self.slice);
+    pub fn new_cursor(&self) -> std::io::Cursor<&[u8]> {
+        let mut cur = std::io::Cursor::new(self.slice);
         cur.seek(SeekFrom::Start(self.read_start as u64)).unwrap();
 
         cur
     }
 }
-
-/*
-impl NdNode for NdGroup {
-    fn header(&self) -> &NdHeader {
-        &self.header
-    }
-
-    fn add_gltf_node(
-        &self,
-        _virtual_res: &VirtualResource,
-        ctx: &mut NdGltfContext,
-    ) -> Result<Option<GltfIndex>, AssetParseError> {
-        Ok(Some(
-            ctx.gltf
-                .add_node(gltf::Node::new(Some("ndGroup".to_string()))),
-        ))
-    }
-}
-*/
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Bone {

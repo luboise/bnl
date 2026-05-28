@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use bnl::modding::ModLike;
-
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
@@ -84,13 +82,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Apply the cutscene mod
     }
 
-    for (aid, raw_asset) in assets
-        .iter_mut()
-        .filter(|(aid, _)| modification.model_mods.contains_key(*aid))
-    {
-        let model_mod = modification.model_mods.get(aid).unwrap();
-        model_mod.apply_raw(&mut raw_asset.data)?;
-    }
+    // for (aid, raw_asset) in assets
+    //     .iter_mut()
+    //     .filter(|(aid, _)| modification.model_mods.contains_key(*aid))
+    // {
+    //     let model_mod = modification.model_mods.get(aid).unwrap();
+    //     model_mod.apply_raw(&mut raw_asset.data)?;
+    // }
 
     let mut ctx = bnl::modding::ModContext {
         bnl_basename: String::default(),

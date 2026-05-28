@@ -67,7 +67,7 @@ pub struct Mod {
     /// The assets which came with the mod
     pub raw_asset_overrides: HashMap<String, RawAssetOverride>,
     pub cutscene_mods: HashMap<String, CutsceneMod>,
-    pub model_mods: HashMap<String, ModelMod>,
+    // pub model_mods: HashMap<String, ModelMod>,
 }
 
 impl Mod {
@@ -81,7 +81,7 @@ impl Mod {
             },
             raw_asset_overrides: HashMap::default(),
             cutscene_mods: HashMap::new(),
-            model_mods: HashMap::new(),
+            // model_mods: HashMap::new(),
         }
     }
 
@@ -133,7 +133,7 @@ impl Mod {
 
         let mut raw_asset_overrides = HashMap::<String, RawAssetOverride>::new();
         let mut cutscene_mods = HashMap::new();
-        let mut model_mods = HashMap::new();
+        // let mut model_mods = HashMap::new();
 
         if let Some(raw_override_dirs) = raw_override_dirs {
             for raw_override_dir in raw_override_dirs {
@@ -245,10 +245,10 @@ impl Mod {
 
                     None
                 }
-                AssetType::Model => {
-                    model_mods.insert(override_aid.to_string(), ModelMod::from_dir(&override_dir)?);
-                    None
-                }
+                // AssetType::Model => {
+                //     model_mods.insert(override_aid.to_string(), ModelMod::from_dir(&override_dir)?);
+                //     None
+                // }
                 _ => None, //
                            /*
                            AssetType::ResTexture => todo!(),
@@ -290,7 +290,7 @@ impl Mod {
             spec,
             raw_asset_overrides,
             cutscene_mods,
-            model_mods,
+            // model_mods,
         })
     }
 
@@ -316,7 +316,7 @@ impl Mod {
             })
             .chain(self.raw_asset_overrides.keys().cloned())
             .chain(self.cutscene_mods.keys().cloned())
-            .chain(self.model_mods.keys().cloned())
+            // .chain(self.model_mods.keys().cloned())
             .collect()
     }
 
@@ -391,6 +391,7 @@ impl crate::modding::ModLike for CutsceneMod {
     }
 }
 
+/*
 #[derive(Debug, Clone)]
 pub struct ModelMod {
     textures: HashMap<u32, crate::asset::texture::Texture>,
@@ -481,3 +482,4 @@ impl crate::modding::ModLike for ModelMod {
         Ok(Self { textures })
     }
 }
+*/
