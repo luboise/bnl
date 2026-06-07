@@ -259,7 +259,10 @@ impl PixelBits for D3DFormat {
 }
 
 #[repr(u32)]
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize)]
+#[binrw::binrw]
+#[br(repr = u32)]
+#[bw(repr = u32)]
 pub enum D3DPrimitiveType {
     None = 0,
     PointList = 1,

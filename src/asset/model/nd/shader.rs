@@ -135,7 +135,7 @@ pub struct NdShaderParam2Payload {
 }
 
 impl NdShaderParam2Payload {
-    pub fn from_model_slice(model_slice: &ModelSlice) -> Result<Self, NdError> {
+    pub fn from_model_slice(model_slice: &ModelSlice) -> Result<Self, crate::Error> {
         let mut cur = std::io::Cursor::new(model_slice.slice);
 
         cur.seek(SeekFrom::Start(model_slice.read_start as u64))?;

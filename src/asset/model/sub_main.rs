@@ -2,10 +2,10 @@ use binrw::BinReaderExt;
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::{
     collections::HashMap,
-    io::{BufRead, Read, Seek, SeekFrom},
+    io::{Read, Seek, SeekFrom},
 };
 
-use crate::asset::model::nd::{ModelReadContext, ModelSlice, Nd};
+use crate::asset::model::nd::{ModelReadContext, Nd};
 
 #[derive(Debug, strum::Display)]
 pub enum SubresourceError {
@@ -146,7 +146,7 @@ impl binrw::BinRead for ModelSubresource {
         }
 
         let mut reader =
-            std::io::Cursor::new(reader.bytes().skip(20).collect::<Result<Vec<_>, _>>()?);
+            std::io::Cursor::new(reader.bytes().skip(0x20).collect::<Result<Vec<_>, _>>()?);
 
         let unknown1 = reader.read_u32::<LittleEndian>()?;
         let unknown2 = reader.read_u32::<LittleEndian>()?;
@@ -155,14 +155,7 @@ impl binrw::BinRead for ModelSubresource {
         let key_values_ptr = reader.read_u32::<LittleEndian>()?;
         let unknown3 = reader.read_u32::<LittleEndian>()?;
 
-        let floats: [f32; 4] = [
-            reader.read_le()?,
-            reader.read_le()?,
-            reader.read_le()?,
-            reader.read_le()?,
-        ];
-
-        let mut key_value_map = HashMap::new();
+        let floats = reader.read_le::<[f32; 4]>()?;
 
         let key_value_map = {
             if key_values_ptr == 0 {
@@ -175,7 +168,7 @@ impl binrw::BinRead for ModelSubresource {
                     .try_into()
                     .map_err(|e| binrw::Error::Custom {
                         pos: reader.stream_position().unwrap_or_default(),
-                        err: Box::new("unable to get key value map"),
+                        err: Box::new(format!("unable to get key value map: {e}")),
                     })?
             }
         };
@@ -189,26 +182,16 @@ impl binrw::BinRead for ModelSubresource {
                 .collect::<Result<_, _>>()?
         };
 
-        let mut mrc = ModelReadContext::new(&key_value_map);
+        let mrc = ModelReadContext::new(&key_value_map, &resource_bytes);
 
         let mut primitives = vec![];
-
         for primitive_ptr in primitive_ptrs {
-            match Nd::new(
-                &mut mrc,
-                ModelSlice {
-                    slice: bytes,
-                    read_start: primitive_ptr as usize,
-                },
-            ) {
-                Ok(nd) => primitives.push(nd),
-                Err(_) => {
-                    return Err(SubresourceError::CreationError.into());
-                }
-            }
-        }
+            let mut reader_clone = reader.clone();
+            reader_clone.seek(SeekFrom::Start(primitive_ptr.into()))?;
 
-        let mut primitives = Vec::with_capacity(primitive_ptrs.len());
+            let nd = reader.read_le_args::<Nd>(&mrc)?;
+            primitives.push(nd);
+        }
 
         Ok(Self {
             unknown1,

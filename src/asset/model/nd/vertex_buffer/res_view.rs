@@ -1,7 +1,8 @@
-use byteorder::{LittleEndian, ReadBytesExt as _};
+use binrw::BinReaderExt;
 use gltf_writer::gltf::GltfIndex;
 
 #[derive(Debug, Clone, serde::Serialize)]
+#[binrw::binrw]
 pub struct VertexBufferResourceView {
     stride: u8,
     view_type: VertexBufferViewType,
@@ -19,17 +20,15 @@ pub struct VertexBufferResourceView {
 }
 
 impl VertexBufferResourceView {
-    pub fn from_cursor(cur: &mut std::io::Cursor<&[u8]>) -> Result<Self, std::io::Error> {
-        Ok(VertexBufferResourceView {
-            stride: cur.read_u8()?,
-            view_type: cur.read_u8()?.into(),
-            unknown_u16: cur.read_u16::<LittleEndian>()?,
-            unknown_u32_1: cur.read_u32::<LittleEndian>()?,
-            unknown_u32_2: cur.read_u32::<LittleEndian>()?,
-            unknown_u32_3: cur.read_u32::<LittleEndian>()?,
-            view_start: cur.read_u32::<LittleEndian>()?,
-            view_size: cur.read_u32::<LittleEndian>()?,
-        })
+    pub fn from_reader<R: std::io::Read + std::io::Seek>(
+        reader: &mut R,
+    ) -> Result<Self, crate::Error> {
+        Ok(reader.read_le()?)
+    }
+
+    #[deprecated(note = "use from_reader(&mut Cursor)")]
+    pub fn from_cursor(cur: &mut std::io::Cursor<&[u8]>) -> Result<Self, crate::Error> {
+        Self::from_reader(cur)
     }
 
     pub(crate) fn add_to_gltf(
@@ -110,6 +109,9 @@ impl VertexBufferResourceView {
 
 #[repr(u8)]
 #[derive(Debug, PartialEq, Clone, Copy, serde::Serialize)]
+#[binrw::binrw]
+#[br(repr = u8)]
+#[bw(repr = u8)]
 pub enum VertexBufferViewType {
     Skin = 0x0,
     SkinWeight = 0x8,

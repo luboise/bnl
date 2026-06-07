@@ -25,8 +25,8 @@ fn get_test_file(filename: &str) -> Vec<u8> {
 #[test]
 fn nd_header() {
     let bytes = get_test_bytes();
-    Nd::from_bytes(
-        &mut ModelReadContext::new(&Default::default()),
+    Nd::from_reader(
+        &mut ModelReadContext::new(&Default::default(), &[]),
         &bytes,
         0x34,
     )
@@ -37,8 +37,8 @@ fn nd_header() {
 fn nd_parse_test() {
     let bytes = get_test_bytes();
 
-    Nd::new(
-        &mut ModelReadContext::new(&Default::default()),
+    Nd::from_reader(
+        &mut ModelReadContext::new(&Default::default(), &[]),
         ModelSlice {
             slice: &bytes,
             read_start: 0x34,
@@ -51,8 +51,8 @@ fn nd_parse_test() {
 fn nd_shader_param2() {
     let bytes = get_test_file("test_ndShaderParam2_1");
 
-    let nd = Nd::new(
-        &mut ModelReadContext::new(&Default::default()),
+    let nd = Nd::from_reader(
+        &mut ModelReadContext::new(&Default::default(), &[]),
         ModelSlice {
             slice: &bytes,
             read_start: 0,
