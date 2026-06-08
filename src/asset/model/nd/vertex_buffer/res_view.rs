@@ -1,5 +1,4 @@
 use binrw::BinReaderExt;
-use gltf_writer::gltf::GltfIndex;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[binrw::binrw]
@@ -14,7 +13,7 @@ pub struct VertexBufferResourceView {
     unknown_u32_2: u32,
     unknown_u32_3: u32,
 
-    // 0x16
+    // 0x10
     view_start: u32,
     view_size: u32,
 }
@@ -31,11 +30,11 @@ impl VertexBufferResourceView {
         Self::from_reader(cur)
     }
 
-    pub(crate) fn add_to_gltf(
+    pub fn add_to_gltf(
         &self,
         gltf: &mut gltf_writer::gltf::Gltf,
-        buffer_view_index: GltfIndex,
-    ) -> Result<GltfIndex, std::io::Error> {
+        buffer_view_index: gltf_writer::GltfIndex,
+    ) -> Result<gltf_writer::GltfIndex, std::io::Error> {
         match self.view_type {
             VertexBufferViewType::Vertex => {
                 let num_vertices = self.view_size / 12;
@@ -63,6 +62,7 @@ impl VertexBufferResourceView {
             }
             VertexBufferViewType::Unknown10
             | VertexBufferViewType::Unknown11
+            | VertexBufferViewType::Unknown12
             | VertexBufferViewType::SkinWeight
             | VertexBufferViewType::Unknown14
             | VertexBufferViewType::Unknown15
@@ -108,38 +108,29 @@ impl VertexBufferResourceView {
 }
 
 #[repr(u8)]
-#[derive(Debug, PartialEq, Clone, Copy, serde::Serialize)]
+#[derive(
+    Debug,
+    PartialEq,
+    Clone,
+    Copy,
+    serde::Serialize,
+    num_enum::IntoPrimitive,
+    num_enum::TryFromPrimitive,
+)]
 #[binrw::binrw]
-#[br(repr = u8)]
-#[bw(repr = u8)]
+#[brw(repr = u8)]
 pub enum VertexBufferViewType {
     Skin = 0x0,
     SkinWeight = 0x8,
     Vertex = 0x9,
     Unknown10 = 0xa,
     Unknown11 = 0xb,
+    Unknown12 = 0xc,
     UV = 0xd,
     Unknown14 = 0xe,
     Unknown15 = 0xf,
     Unknown16 = 0x10,
     KnknownFF = 0xff,
-}
-
-impl From<u8> for VertexBufferViewType {
-    fn from(value: u8) -> Self {
-        match value {
-            0 => Self::Skin,
-            0x8 => Self::SkinWeight,
-            0x9 => Self::Vertex,
-            0xa => Self::Unknown10,
-            0xb => Self::Unknown11,
-            0xd => Self::UV,
-            0xe => Self::Unknown14,
-            0xf => Self::Unknown15,
-            0x10 => Self::Unknown16,
-            _ => Self::KnknownFF,
-        }
-    }
 }
 
 /// Marker trait for a vertex buffer resource view

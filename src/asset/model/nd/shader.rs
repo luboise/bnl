@@ -118,9 +118,9 @@ impl binrw::BinRead for NdShaderParam2Payload {
     type Args<'a> = ();
 
     fn read_options<R: Read + Seek>(
-        reader: &mut R,
-        endian: binrw::Endian,
-        args: Self::Args<'_>,
+        _reader: &mut R,
+        _endian: binrw::Endian,
+        _args: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<Self> {
         todo!()
         /*
@@ -222,10 +222,6 @@ impl binrw::BinRead for NdShaderParam2Payload {
 }
 
 impl NdShaderParam2Payload {
-    pub fn from_model_slice(model_slice: &ModelSlice) -> Result<Self, crate::Error> {
-        todo!()
-    }
-
     pub fn attribute_map(&self) -> &IndexMap<String, AttributeValue> {
         &self.attribute_map
     }

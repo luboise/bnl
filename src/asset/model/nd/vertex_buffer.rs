@@ -1,13 +1,7 @@
-use std::io::{Seek, SeekFrom, Write};
-
-use binrw::{BinReaderExt, BinWriterExt};
-
 use crate::asset::model::nd::res_view::VertexBufferResourceView;
+use std::io::SeekFrom;
 
 pub mod res_view;
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct NdVertexBuffer {}
 
 pub fn get_resource_view<V: res_view::VertexBufferView>(
     resource: &[u8],
@@ -66,21 +60,19 @@ Ok(NdData::VertexBuffer {
 })
 */
 
+#[expect(clippy::manual_non_exhaustive)]
 #[binrw::binrw]
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone)]
 #[bw(stream=w)]
 pub struct NdVertexBufferData {
     #[br(temp)]
-    #[bw(calc = w.stream_position()? as u32)]
+    #[bw(calc = 8 + w.stream_position()? as u32)]
     resource_views_ptr: u32,
     #[br(temp)]
     #[bw(try_calc = resource_views.len().try_into())]
     num_resource_views: u32,
-
-    #[serde(skip)]
-    #[br(count = num_resource_views,
-            seek_before = SeekFrom::Start(resource_views_ptr.into()),
-            restore_position
-        )]
-    resource_views: Vec<super::res_view::VertexBufferResourceView>,
+    #[br(count = num_resource_views, seek_before = SeekFrom::Start(resource_views_ptr.into()))]
+    pub resource_views: Vec<super::res_view::VertexBufferResourceView>,
+    #[brw(magic = b"ndVertexBuffer\x00\x00")]
+    _name: (),
 }

@@ -36,9 +36,9 @@ impl binrw::BinWrite for NdPushBufferData {
 
     fn write_options<W: std::io::prelude::Write + std::io::prelude::Seek>(
         &self,
-        writer: &mut W,
-        endian: binrw::Endian,
-        args: Self::Args<'_>,
+        _writer: &mut W,
+        _endian: binrw::Endian,
+        _args: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<()> {
         todo!()
     }
@@ -111,7 +111,7 @@ impl binrw::BinRead for NdPushBufferData {
             let mut draw_calls = Vec::with_capacity(num_draws);
 
             for i in 0..num_draws {
-                reader.seek(SeekFrom::Start(push_data_ptrs[i].into()));
+                reader.seek(SeekFrom::Start(push_data_ptrs[i].into()))?;
                 let num_indices = index_counts[i]
                     .try_into()
                     .map_err(|e| binrw::Error::Custom {

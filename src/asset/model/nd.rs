@@ -341,7 +341,9 @@ impl NdData {
     pub fn name_offset(&self) -> i64 {
         match self {
             NdData::Skeleton { .. } => 0x8,
-            NdData::VertexBuffer(nd_vertex_buffer_data) => todo!(),
+            NdData::VertexBuffer(nd_vertex_buffer_data) => {
+                8 + nd_vertex_buffer_data.resource_views.len() as i64 * 0x18
+            }
             NdData::PushBuffer(nd_push_buffer_data) => todo!(),
             NdData::BGPushBuffer(nd_bgpush_buffer_data) => todo!(),
             NdData::Group => todo!(),
