@@ -5,13 +5,22 @@ use binrw::BinReaderExt;
 use super::prelude::*;
 use crate::d3d::D3DPrimitiveType;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct DrawCall {
     pub prim_type: D3DPrimitiveType,
     pub indices: Vec<u16>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[binrw::binrw]
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NdBGPushBufferData {
+    push_buffer: NdPushBufferData,
+    unknown_ptr_1: u32,
+    unknown_ptr_2: u32,
+    floats: [f32; 6],
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct NdPushBufferData {
     pub(crate) num_draws: u32,
     pub(crate) unknown_u32_1: u32,
@@ -20,6 +29,19 @@ pub struct NdPushBufferData {
     pub(crate) prevent_culling_flag: u8,
 
     pub draw_calls: Vec<DrawCall>,
+}
+
+impl binrw::BinWrite for NdPushBufferData {
+    type Args<'a> = ();
+
+    fn write_options<W: std::io::prelude::Write + std::io::prelude::Seek>(
+        &self,
+        writer: &mut W,
+        endian: binrw::Endian,
+        args: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        todo!()
+    }
 }
 
 impl binrw::BinRead for NdPushBufferData {

@@ -1,10 +1,12 @@
-use crate::asset::model::nd::res_view::VertexBufferResourceView;
+use std::io::{Seek, SeekFrom, Write};
 
-use super::prelude::*;
+use binrw::{BinReaderExt, BinWriterExt};
+
+use crate::asset::model::nd::res_view::VertexBufferResourceView;
 
 pub mod res_view;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct NdVertexBuffer {}
 
 pub fn get_resource_view<V: res_view::VertexBufferView>(
@@ -45,4 +47,40 @@ pub fn get_vertex_positions(
                 .collect()
         })
     })
+}
+
+/*
+let resource_views_ptr = reader.read_u32::<LittleEndian>()?;
+let num_resource_views = reader.read_u32::<LittleEndian>()?;
+
+let mut resource_views = Vec::with_capacity(num_resource_views as usize);
+
+for _ in 0..num_resource_views {
+    resource_views.push(reader.read_le()?);
+}
+
+Ok(NdData::VertexBuffer {
+    resource_views_ptr,
+    num_resource_views,
+    resource_views,
+})
+*/
+
+#[binrw::binrw]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[bw(stream=w)]
+pub struct NdVertexBufferData {
+    #[br(temp)]
+    #[bw(calc = w.stream_position()? as u32)]
+    resource_views_ptr: u32,
+    #[br(temp)]
+    #[bw(try_calc = resource_views.len().try_into())]
+    num_resource_views: u32,
+
+    #[serde(skip)]
+    #[br(count = num_resource_views,
+            seek_before = SeekFrom::Start(resource_views_ptr.into()),
+            restore_position
+        )]
+    resource_views: Vec<super::res_view::VertexBufferResourceView>,
 }

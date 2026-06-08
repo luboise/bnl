@@ -2,12 +2,12 @@ mod push_buffer;
 mod shader;
 mod vertex_buffer;
 
-use binrw::{BinReaderExt, binrw};
+use binrw::{BinReaderExt, BinWriterExt, binrw};
 pub use push_buffer::{DrawCall, NdPushBufferData};
 pub use vertex_buffer::*;
 
 pub(crate) mod prelude {
-    pub use serde::{Serialize, ser::SerializeMap};
+    pub use serde::ser::SerializeMap;
 
     // Internal
     pub use super::ModelSlice;
@@ -22,7 +22,7 @@ use std::{
 
 use serde::{Serialize, ser::SerializeMap};
 
-use crate::asset::model::nd::{res_view::VertexBufferResourceView, shader::NdShaderParam2Payload};
+use crate::asset::model::nd::{push_buffer::NdBGPushBufferData, shader::NdVertexShaderData};
 
 use prelude::*;
 
@@ -41,6 +41,9 @@ impl Serialize for Nd {
         map.end()
     }
 }
+
+#[derive(Debug, Clone)]
+pub struct NdHeader {}
 
 #[derive(Debug, Clone)]
 pub struct Nd {
@@ -110,13 +113,10 @@ impl binrw::BinRead for Nd {
 
             reader.seek(SeekFrom::Start(old_pos))?;
 
-            String::from_utf8(chars).map_err(|e| binrw::Error::Custom {
-                pos: reader.stream_position().unwrap_or(0),
-                err: Box::new(e),
-            })?
+            String::from_utf8(chars).map_err(br_error(reader))?
         };
 
-        let nd_type: NdType = name.parse().unwrap_or(NdType::Other(0));
+        let nd_type: NdType = name.parse().map_err(br_error(reader))?;
 
         let first_child = match first_child_ptr {
             0 => None,
@@ -141,44 +141,13 @@ impl binrw::BinRead for Nd {
         };
 
         let data: Result<NdData, crate::Error> = match nd_type {
-            NdType::VertexBuffer => {
-                let resource_views_ptr = reader.read_u32::<LittleEndian>()?;
-                let num_resource_views = reader.read_u32::<LittleEndian>()?;
-
-                let mut resource_views = Vec::with_capacity(num_resource_views as usize);
-
-                for _ in 0..num_resource_views {
-                    resource_views.push(VertexBufferResourceView::from_reader(&mut reader)?);
-                }
-
-                Ok(NdData::VertexBuffer {
-                    resource_views_ptr,
-                    num_resource_views,
-                    resource_views,
-                })
-            }
-            NdType::PushBuffer | NdType::BGPushBuffer => {
-                let push_buffer = reader.read_le()?;
-
-                if nd_type == NdType::BGPushBuffer {
-                    let unknown_ptr_1 = reader.read_u32::<LittleEndian>()?;
-                    let unknown_ptr_2 = reader.read_u32::<LittleEndian>()?;
-
-                    Ok(NdData::BGPushBuffer {
-                        push_buffer: reader.read_le()?,
-                        unknown_ptr_1: reader.read_le()?,
-                        unknown_ptr_2: reader.read_le()?,
-                        floats: reader.read_le()?,
-                    })
-                } else {
-                    Ok(NdData::PushBuffer(push_buffer))
-                }
-            }
-            NdType::Group => {
-                // NdGroup spotted
-                Ok(NdData::Group)
-            }
+            NdType::VertexBuffer => Ok(NdData::VertexBuffer(reader.read_le()?)),
+            NdType::PushBuffer => Ok(NdData::PushBuffer(reader.read_le()?)),
+            NdType::BGPushBuffer => Ok(NdData::BGPushBuffer(reader.read_le()?)),
+            NdType::Group => Ok(NdData::Group),
             NdType::ShaderParam2 => {
+                todo!()
+                /*
                 let main_payload_ptr = reader.read_u32::<LittleEndian>()?;
                 let sub_payload_ptr = reader.read_u32::<LittleEndian>()?;
 
@@ -199,65 +168,20 @@ impl binrw::BinRead for Nd {
                     main_payload,
                     sub_payload,
                 })
+                */
             }
-            NdType::Skeleton => {
-                let num_bones = reader.read_u32::<LittleEndian>()?;
-                let bones_ptr = reader.read_u32::<LittleEndian>()?;
-
-                let bones = if bones_ptr != 0 && num_bones > 0 {
-                    let mut bones = Vec::with_capacity(num_bones as usize);
-
-                    reader.seek(SeekFrom::Start(bones_ptr as u64))?;
-
-                    for i in 0..num_bones {
-                        bones.push(Bone {
-                            name: ctx.get_bone_name(i).map(|v| v.into()),
-                            parent_id: reader.read_u16::<LittleEndian>()?,
-                            id: reader.read_u16::<LittleEndian>()?,
-                            local_transform: [
-                                reader.read_f32::<LittleEndian>()?,
-                                reader.read_f32::<LittleEndian>()?,
-                                reader.read_f32::<LittleEndian>()?,
-                            ],
-                            global_transform: [
-                                reader.read_f32::<LittleEndian>()?,
-                                reader.read_f32::<LittleEndian>()?,
-                                reader.read_f32::<LittleEndian>()?,
-                            ],
-                            sentinel: reader.read_u32::<LittleEndian>()?.to_le_bytes(),
-                        });
-                    }
-
-                    bones
-                } else {
-                    vec![]
-                };
-
-                Ok(NdData::Skeleton { bones })
-            }
+            NdType::Skeleton => Ok(NdData::Skeleton(reader.read_le()?)),
             NdType::Shader2 => Ok(NdData::Shader2),
-            NdType::VertexShader => Ok(NdData::VertexShader),
-            NdType::RigidSkinIdx | NdType::MtxArray | NdType::BlendShape | NdType::Other(_) => Ok(
-                NdData::Unknown(nd_type, nd_type.to_string(), Vec::default()),
+            NdType::VertexShader => Ok(NdData::VertexShader(reader.read_le()?)),
+            NdType::RigidSkinIdx | NdType::MtxArray | NdType::BlendShape => Ok(
+                todo!(), // NdData::Unknown(nd_type, nd_type.to_string(), Vec::default()),
             ),
         };
 
-        /*
-        let data = match nd_type {
-            NdType::Group => {}
-            NdType::Skeleton => todo!(),
-            NdType::RigidSkinIdx => todo!(),
-            NdType::MtxArray => todo!(),
-            NdType::Shader2 => todo!(),
-            NdType::ShaderParam2 => todo!(),
-            NdType::VertexBuffer => todo!(),
-            NdType::PushBuffer => todo!(),
-            NdType::VertexShader => todo!(),
-            NdType::BGPushBuffer => todo!(),
-            NdType::BlendShape => todo!(),
-            NdType::Other(_) => todo!(),
-        };
-        */
+        let data = data.map_err(|e| binrw::Error::Custom {
+            pos: reader.stream_position().unwrap_or(0),
+            err: Box::new(format!("failed to get data for Nd: {e}")),
+        })?;
 
         Ok(Self {
             unknown_u16,
@@ -269,11 +193,61 @@ impl binrw::BinRead for Nd {
             parent_ptr,
             first_child,
             next_sibling,
-            data: Box::new(data.map_err(|e| binrw::Error::Custom {
-                pos: reader.stream_position().unwrap_or_default(),
-                err: Box::new(format!("failed to get data for Nd: {e}")),
-            })?),
+            data: Box::new(data),
         })
+    }
+}
+
+pub(crate) fn br_error<E: std::error::Error>(
+    seeker: &mut impl std::io::Seek,
+) -> impl FnMut(E) -> binrw::Error {
+    |e: E| binrw::Error::Custom {
+        pos: seeker.stream_position().unwrap_or(0),
+        err: Box::new(format!("failed to get data for Nd: {e}")),
+    }
+}
+
+impl binrw::BinWrite for Nd {
+    type Args<'a> = ();
+
+    fn write_options<W: std::io::prelude::Write + Seek>(
+        &self,
+        writer: &mut W,
+        endian: binrw::Endian,
+        args: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        let base = writer.stream_position()?;
+
+        let Nd {
+            unknown_u16,
+            unknown_ptr1,
+            unknown_ptr2,
+            unknown_u32,
+            first_child_ptr,
+            next_sibling_ptr,
+            parent_ptr,
+            first_child,
+            next_sibling,
+            data,
+        } = &self;
+
+        let name_offset =
+            base + 0x20 + u64::try_from(data.name_offset()).map_err(br_error(writer))?;
+        let val = u32::try_from(name_offset).map_err(br_error(writer))?;
+
+        writer.write_le(&val)?;
+        writer.write_le(&self.nd_type())?;
+        writer.write_le(&unknown_u16)?;
+        writer.write_le(&unknown_ptr1)?;
+        writer.write_le(&unknown_ptr2)?;
+        writer.write_le(&unknown_u32)?;
+        // first child, sibling, prev
+        writer.write_le(&0u32)?;
+        writer.write_le(&0u32)?;
+        writer.write_le(&0u32)?;
+        writer.write_le(data)?;
+
+        Ok(())
     }
 }
 
@@ -301,8 +275,11 @@ impl Nd {
 }
 
 #[binrw]
-#[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, strum::EnumString, strum::Display)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, strum::EnumString, strum::Display,
+)]
+#[repr(u16)]
+#[brw(little, repr = u16)]
 pub enum NdType {
     #[strum(serialize = "ndGroup")]
     Group = 0x01,
@@ -326,43 +303,20 @@ pub enum NdType {
     BGPushBuffer = 0x16,
     #[strum(serialize = "ndBlendShape")]
     BlendShape = 0x17,
-    #[strum(serialize = "ndUnknown")]
-    Other(u32),
 }
 
-#[derive(Debug, Clone, Serialize)]
-#[binrw::binread]
-// TODO: binrw::binwrite
+#[derive(Debug, Clone)]
+#[binrw::binrw]
 pub enum NdData {
-    Skeleton {
-        #[br(parse_with = binrw::helpers::until_eof)]
-        bones: Vec<Bone>,
-    },
-    VertexBuffer {
-        resource_views_ptr: u32,
-        num_resource_views: u32,
-
-        #[serde(skip)]
-        #[br(count = num_resource_views,
-            seek_before = SeekFrom::Start(resource_views_ptr.into()),
-            restore_position
-        )]
-        resource_views: Vec<VertexBufferResourceView>,
-    },
+    Skeleton(NdSkeletonData),
+    VertexBuffer(NdVertexBufferData),
     PushBuffer(NdPushBufferData),
-    BGPushBuffer {
-        push_buffer: NdPushBufferData,
-        unknown_ptr_1: u32,
-        unknown_ptr_2: u32,
-        floats: [f32; 6],
-    },
+    BGPushBuffer(NdBGPushBufferData),
     Group,
     Shader2,
-    VertexShader,
-    ShaderParam2 {
-        main_payload: NdShaderParam2Payload,
-        sub_payload: Option<NdShaderParam2Payload>,
-    },
+    VertexShader(NdVertexShaderData),
+    ShaderParam2,
+    // ShaderParam2(NdShaderParam2Data),
     Unknown(
         NdType,
         #[br(parse_with = binrw::helpers::until_eof)] Vec<u8>,
@@ -378,9 +332,23 @@ impl NdData {
             NdData::BGPushBuffer { .. } => NdType::BGPushBuffer,
             NdData::Group => NdType::Group,
             NdData::Shader2 => NdType::Shader2,
-            NdData::VertexShader => NdType::VertexShader,
-            NdData::ShaderParam2 { .. } => NdType::ShaderParam2,
+            NdData::VertexShader(_) => NdType::VertexShader,
+            NdData::ShaderParam2 => NdType::ShaderParam2,
             NdData::Unknown(nd_type, ..) => *nd_type,
+        }
+    }
+
+    pub fn name_offset(&self) -> i64 {
+        match self {
+            NdData::Skeleton { .. } => 0x8,
+            NdData::VertexBuffer(nd_vertex_buffer_data) => todo!(),
+            NdData::PushBuffer(nd_push_buffer_data) => todo!(),
+            NdData::BGPushBuffer(nd_bgpush_buffer_data) => todo!(),
+            NdData::Group => todo!(),
+            NdData::Shader2 => todo!(),
+            NdData::VertexShader(nd_vertex_shader_data) => 0x48,
+            NdData::ShaderParam2 => todo!(),
+            NdData::Unknown(nd_type, items) => todo!(),
         }
     }
 }
@@ -420,17 +388,6 @@ impl<'a> Iterator for NdIterator<'a> {
         self.stack.pop_front()
     }
 }
-
-/*
-impl Serialize for Nd {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.header().serialize(serializer)
-    }
-}
-*/
 
 pub struct ModelReadContext<'a> {
     key_value_map: &'a HashMap<String, Vec<u8>>,
@@ -488,14 +445,33 @@ impl<'a> ModelSlice<'a> {
     }
 }
 
+#[binrw::binrw]
+#[bw(stream = w)]
+#[derive(Debug, Clone)]
+pub struct NdSkeletonData {
+    #[br(temp)]
+    #[bw(try_calc = bones.len().try_into())]
+    num_bones: u32,
+    #[br(temp)]
+    #[bw(try_calc = u32::try_from(w.stream_position()?)
+        .map(|v| v + (0x8 + 0xc - 4)))]
+    bones_ptr: u32,
+    #[brw(magic = b"ndSkeleton\x00\x00")]
+    _name: (),
+    #[br(count = num_bones)]
+    bones: Vec<Bone>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[binrw::binrw]
+#[expect(clippy::manual_non_exhaustive)]
 pub struct Bone {
     pub parent_id: u16,
     pub id: u16,
     pub local_transform: [f32; 3],
     pub global_transform: [f32; 3],
-    pub sentinel: [u8; 4],
+    #[brw(magic = b"\xff\xff\x01\xcd")]
+    _sentinel: (),
 }
 
 #[path = "./nd_tests.rs"]
