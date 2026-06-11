@@ -344,7 +344,7 @@ impl NdData {
             NdData::VertexBuffer(nd_vertex_buffer_data) => {
                 8 + nd_vertex_buffer_data.resource_views.len() as i64 * 0x18
             }
-            NdData::PushBuffer(nd_push_buffer_data) => todo!(),
+            NdData::PushBuffer(..) => 0x20,
             NdData::BGPushBuffer(nd_bgpush_buffer_data) => todo!(),
             NdData::Group => todo!(),
             NdData::Shader2 => todo!(),

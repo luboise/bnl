@@ -1,9 +1,9 @@
 use std::io::SeekFrom;
 
-use binrw::BinReaderExt;
+use binrw::{BinReaderExt, BinWriterExt};
 
 use super::prelude::*;
-use crate::d3d::D3DPrimitiveType;
+use crate::{asset::model::nd::br_error, d3d::D3DPrimitiveType};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DrawCall {
@@ -22,7 +22,6 @@ pub struct NdBGPushBufferData {
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct NdPushBufferData {
-    pub(crate) num_draws: u32,
     pub(crate) unknown_u32_1: u32,
     pub(crate) unknown_u32_2: u32,
     pub(crate) unknown_u32_3: u32,
@@ -36,11 +35,72 @@ impl binrw::BinWrite for NdPushBufferData {
 
     fn write_options<W: std::io::prelude::Write + std::io::prelude::Seek>(
         &self,
-        _writer: &mut W,
+        writer: &mut W,
         _endian: binrw::Endian,
         _args: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<()> {
-        todo!()
+        let NdPushBufferData {
+            unknown_u32_1,
+            unknown_u32_2,
+            unknown_u32_3,
+            prevent_culling_flag,
+            draw_calls,
+        } = self;
+
+        let num_draws = u32::try_from(draw_calls.len()).map_err(br_error(writer))?;
+
+        let vertex_counts = draw_calls
+            .iter()
+            .map(|draw_call| draw_call.indices.len().try_into())
+            .collect::<Result<Vec<u32>, _>>()
+            .map_err(br_error(writer))?;
+
+        let primitive_types = draw_calls
+            .iter()
+            .map(|draw_call| u32::from(draw_call.prim_type))
+            .collect::<Vec<_>>();
+
+        writer.write_le(&num_draws)?;
+        writer.write_le(&unknown_u32_1)?;
+        writer.write_le(&unknown_u32_2)?;
+        writer.write_le(&unknown_u32_3)?;
+
+        // Vertex counts ptr
+        let vertex_counts_ptr = (writer.stream_position()? + 0x14 + 0xc) as u32;
+        let push_data_ptrs_ptr = vertex_counts_ptr + 4 * num_draws;
+        let primitive_types_ptr = push_data_ptrs_ptr + 4 * num_draws;
+
+        writer.write_le(&push_data_ptrs_ptr)?;
+        writer.write_le(&primitive_types_ptr)?;
+        writer.write_le(&vertex_counts_ptr)?;
+
+        writer.write_le(&prevent_culling_flag)?;
+        writer.write_le(b"\xff\xff\x00")?;
+
+        writer.write_all(b"ndPushBuffer\x00\x00\x00\x00")?;
+
+        let (draw_ptrs, indices) = {
+            let data_start = primitive_types_ptr + 4 * num_draws;
+
+            let mut draw_ptrs = Vec::with_capacity(num_draws.try_into().map_err(br_error(writer))?);
+            let mut indices =
+                Vec::with_capacity(draw_calls.iter().map(|dc| dc.indices.len()).sum());
+
+            for draw_call in draw_calls {
+                let ptr = data_start + (indices.len() * size_of::<u16>()) as u32;
+                draw_ptrs.push(ptr);
+                indices.extend_from_slice(&draw_call.indices);
+            }
+
+            (draw_ptrs, indices)
+        };
+
+        writer.write_le(&vertex_counts)?;
+        writer.write_le(&draw_ptrs)?;
+        writer.write_le(&primitive_types)?;
+        writer.write_le(&indices)?;
+
+        Ok(())
     }
 }
 
@@ -64,7 +124,7 @@ impl binrw::BinRead for NdPushBufferData {
         {
             let [pad1, pad2, pad3] = [reader.read_u8()?, reader.read_u8()?, reader.read_u8()?];
 
-            if pad1 != 0 || pad2 != 0 || pad3 != 0 {
+            if pad1 != 0xff || pad2 != 0xff || pad3 != 0x0 {
                 return Err(binrw::Error::BadMagic {
                     pos: reader.stream_position().unwrap_or_default(),
                     found: Box::new([pad1, pad2, pad3]),
@@ -73,7 +133,6 @@ impl binrw::BinRead for NdPushBufferData {
         }
 
         let mut data = Self {
-            num_draws,
             unknown_u32_1,
             unknown_u32_2,
             unknown_u32_3,
