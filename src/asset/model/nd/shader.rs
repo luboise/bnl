@@ -333,3 +333,55 @@ pub struct NdVertexShaderData {
         seek_before = SeekFrom::Start(strides_ptr.into()))]
     strides: Vec<u8>,
 }
+
+
+
+#[binrw::binrw]
+#[bw(stream = w)]
+#[derive(Debug, Clone)]
+pub struct PixelShader {
+ pixel_shader_type: 	u32,	// used at runtime, expect 0?
+ #[br(assert(shader_ptr != 0))]
+ #[bw(try_calc = w.stream_position().ok().and_then(|v|u32::try_from(v).ok()).ok_or("bad conversion")
+     .map(|pos| pos + 16))]
+ shader_ptr: 	u32,
+ length: 	u32,
+ shader_handle: 	u32,		// used at runtime for handle
+ some_u32: u32, // possibly padding?
+ #[br(count = length)]
+ shader: Vec<u8>
+}
+
+impl PixelShader {
+    pub fn size(&self) -> usize {
+        5 * size_of::<u32>() + self.shader.len()
+    }
+}
+
+
+#[binrw::binrw]
+#[bw(stream = w)]
+#[derive(Debug, Clone)]
+pub struct NdShader2Data {
+    #[br(temp)]
+    #[bw(try_calc = u32::try_from(w.stream_position().unwrap()).map(|v| v + 8))]
+    pixel_shader_ptr: u32,
+    #[br(temp)]
+    #[bw(calc = pixel_shader_sub.as_ref()
+        .map(|shader2| pixel_shader_ptr + pixel_shader.size() as u32)
+        .unwrap_or(0u32))]
+    pixel_shader_ptr_2: u32,
+    pixel_shader: PixelShader,
+    #[br(if(pixel_shader_ptr_2 != 0), 
+        seek_before = SeekFrom::Start(pixel_shader_ptr_2.into()))]
+    pixel_shader_sub: Option<PixelShader>,
+    #[brw(magic = b"ndShader2\x00\x00")]
+    _magic: ()
+}
+
+impl NdShader2Data {
+    pub fn name_offset(&self) -> i64 {
+        8 + self.pixel_shader.size() as i64
+    }
+}
+

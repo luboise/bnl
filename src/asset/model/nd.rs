@@ -22,7 +22,10 @@ use std::{
 
 use serde::{Serialize, ser::SerializeMap};
 
-use crate::asset::model::nd::{push_buffer::NdBGPushBufferData, shader::NdVertexShaderData};
+use crate::asset::model::nd::{
+    push_buffer::NdBGPushBufferData,
+    shader::{NdShader2Data, NdVertexShaderData},
+};
 
 use prelude::*;
 
@@ -171,7 +174,7 @@ impl binrw::BinRead for Nd {
                 */
             }
             NdType::Skeleton => Ok(NdData::Skeleton(reader.read_le()?)),
-            NdType::Shader2 => Ok(NdData::Shader2),
+            NdType::Shader2 => Ok(NdData::Shader2(reader.read_le()?)),
             NdType::VertexShader => Ok(NdData::VertexShader(reader.read_le()?)),
             NdType::MtxArray => Ok(NdData::MtxArray(reader.read_le()?)),
             NdType::RigidSkinIdx | NdType::BlendShape => Ok(
@@ -314,7 +317,7 @@ pub enum NdData {
     PushBuffer(NdPushBufferData),
     BGPushBuffer(NdBGPushBufferData),
     Group,
-    Shader2,
+    Shader2(NdShader2Data),
     VertexShader(NdVertexShaderData),
     ShaderParam2,
     MtxArray(NdMtxArrayData),
@@ -332,7 +335,7 @@ impl NdData {
             NdData::PushBuffer(_) => NdType::PushBuffer,
             NdData::BGPushBuffer { .. } => NdType::BGPushBuffer,
             NdData::Group => NdType::Group,
-            NdData::Shader2 => NdType::Shader2,
+            NdData::Shader2(_) => NdType::Shader2,
             NdData::VertexShader(_) => NdType::VertexShader,
             NdData::ShaderParam2 => NdType::ShaderParam2,
             NdData::MtxArray(_) => NdType::MtxArray,
@@ -349,7 +352,7 @@ impl NdData {
             NdData::PushBuffer(..) => 0x20,
             NdData::BGPushBuffer(nd_bgpush_buffer_data) => todo!(),
             NdData::Group => todo!(),
-            NdData::Shader2 => todo!(),
+            NdData::Shader2(data) => data.name_offset(),
             NdData::VertexShader(nd_vertex_shader_data) => 0x48,
             NdData::ShaderParam2 => todo!(),
             NdData::Unknown(nd_type, items) => todo!(),
