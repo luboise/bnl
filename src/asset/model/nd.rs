@@ -173,7 +173,8 @@ impl binrw::BinRead for Nd {
             NdType::Skeleton => Ok(NdData::Skeleton(reader.read_le()?)),
             NdType::Shader2 => Ok(NdData::Shader2),
             NdType::VertexShader => Ok(NdData::VertexShader(reader.read_le()?)),
-            NdType::RigidSkinIdx | NdType::MtxArray | NdType::BlendShape => Ok(
+            NdType::MtxArray => Ok(NdData::MtxArray(reader.read_le()?)),
+            NdType::RigidSkinIdx | NdType::BlendShape => Ok(
                 todo!(), // NdData::Unknown(nd_type, nd_type.to_string(), Vec::default()),
             ),
         };
@@ -316,7 +317,7 @@ pub enum NdData {
     Shader2,
     VertexShader(NdVertexShaderData),
     ShaderParam2,
-    // ShaderParam2(NdShaderParam2Data),
+    MtxArray(NdMtxArrayData),
     Unknown(
         NdType,
         #[br(parse_with = binrw::helpers::until_eof)] Vec<u8>,
@@ -334,6 +335,7 @@ impl NdData {
             NdData::Shader2 => NdType::Shader2,
             NdData::VertexShader(_) => NdType::VertexShader,
             NdData::ShaderParam2 => NdType::ShaderParam2,
+            NdData::MtxArray(_) => NdType::MtxArray,
             NdData::Unknown(nd_type, ..) => *nd_type,
         }
     }
@@ -351,6 +353,7 @@ impl NdData {
             NdData::VertexShader(nd_vertex_shader_data) => 0x48,
             NdData::ShaderParam2 => todo!(),
             NdData::Unknown(nd_type, items) => todo!(),
+            NdData::MtxArray(data) => data.name_offset(),
         }
     }
 }
@@ -474,6 +477,52 @@ pub struct Bone {
     pub global_transform: [f32; 3],
     #[brw(magic = b"\xff\xff\x01\xcd")]
     _sentinel: (),
+}
+
+#[binrw::binrw]
+#[derive(Debug, Clone)]
+struct NdMtxArrayEntry {
+    index: u16,
+    idk1: u16,
+    idk2: u8,
+    flags: u8,
+    idk3: u16,
+}
+
+#[binrw::binrw]
+#[derive(Debug, Clone)]
+#[br(stream = r)]
+#[bw(stream = w)]
+pub struct NdMtxArrayData {
+    #[br(temp)]
+    #[bw(try_calc =
+        w.stream_position().ok()
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or("failed to convert").map(|v| v + 0x14))]
+    entries_ptr: u32,
+    #[br(temp)]
+    #[bw(try_calc = entries.len().try_into())]
+    num_entries: u32,
+    count2: u16,
+    calc1: u16, // calculated at runtime
+    some_float: f32,
+    some_u32: u32,
+
+    // Fake fields
+    #[br(if(num_entries > 0 && entries_ptr > 0),
+        count = num_entries,
+        seek_before = SeekFrom::Start(entries_ptr.into())
+        )]
+    entries: Vec<NdMtxArrayEntry>,
+    #[brw(magic = b"ndMtxArray\x00\x00")]
+    _magic: (),
+}
+
+impl NdMtxArrayData {
+    pub fn name_offset(&self) -> i64 {
+        let v = 0x14 + self.entries.len() * 8;
+        v as i64
+    }
 }
 
 #[path = "./nd_tests.rs"]
