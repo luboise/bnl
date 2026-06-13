@@ -1,102 +1,29 @@
-use binrw::BinReaderExt;
+use binrw::{BinReaderExt, BinWriterExt};
 use byteorder::{LittleEndian, ReadBytesExt};
-use std::{
-    collections::HashMap,
-    io::{Read, Seek, SeekFrom},
+use std::io::{Read, Seek, SeekFrom, Write};
+
+use crate::asset::model::nd::{
+    ModelReadContext, ModelWriteContext, Nd, br_error, new_write_context,
 };
 
-use crate::asset::model::nd::{ModelReadContext, Nd};
-
-#[derive(Debug, strum::Display)]
-pub enum SubresourceError {
-    CreationError,
-}
-
-impl std::error::Error for SubresourceError {}
-
-impl From<std::io::Error> for SubresourceError {
-    fn from(_: std::io::Error) -> Self {
-        Self::CreationError
-    }
-}
-
-const MESH_HEADER_SIZE: usize = 40;
-
-#[derive(Debug)]
-pub struct Mesh {
-    header: ModelSubresource,
-    primitives: Vec<Nd>,
-}
-
-/*
-impl Mesh {
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Result<Mesh, SubresourceError> {
-        let mut cur = Cursor::new(bytes);
-
-        // TODO: Add bounds checks
-
-        // let end = bytes.len();
-
-        let mut mesh_header_bytes = [0x00; MESH_HEADER_SIZE];
-
-        cur.read_exact(&mut mesh_header_bytes)?;
-
-        let header = MeshDescriptor::from_bytes(&mesh_header_bytes)?;
-
-        let mut primitive_ptrs = vec![0u32; header.primitive_count as usize];
-
-        let mut primitive_cur = cur.clone();
-
-        primitive_cur.seek(SeekFrom::Start(header.primitive_ptrs_start as u64));
-
-        for i in 0..header.primitive_count as usize {
-            primitive_ptrs[i] = primitive_cur.read_u32::<LittleEndian>()?;
-        }
-
-        let mut primitives = Vec::with_capacity(primitive_ptrs.len());
-
-
-        let mut mrc = ModelReadContext::new(&);
-
-        for primitive_ptr in primitive_ptrs {
-            if let Ok(nd) = Nd::new(
-                &mut ModelReadContext::default(),
-                ModelSlice {
-                    slice: bytes,
-                    read_start: primitive_ptr as usize,
-                },
-            ) {
-                primitives.push(nd);
-            };
-        }
-
-        Ok(Mesh { header, primitives })
-    }
-
-    pub fn primitives(&self) -> &[Nd] {
-        &self.primitives
-    }
-}
-*/
-
-#[repr(C)]
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ModelSubresource {
-    pub(crate) unknown1: u32,
-    pub(crate) unknown2: u32,
-    // Temp values used in se/dese
-    // primitive_ptrs_start: u32,
-    // primitive_count: u32,
-    // key_values_ptr: u32,
-    pub(crate) unknown3: u32,
-    pub(crate) floats: [f32; 4],
+    pub unknown1: u32,
+    pub unknown2: u32,
+    // nodes_ptr: u32,
+    // num_nodes: u32,
 
-    // DO NOT SERIALISE
-    pub(crate) primitives: Vec<Nd>,
-    pub(crate) key_value_map: HashMap<String, Vec<u8>>,
+    // key_values_ptr: u32,
+    // map2_ptr: u32,
+    pub floats: [f32; 4],
+    pub next_ptr: u32,
+    pub model_model_root: u32,
+    pub nodes: Vec<Nd>,
+    pub properties: indexmap::IndexMap<String, Vec<u8>>,
 }
 
 impl ModelSubresource {
+    #[deprecated(note = "use BinReaderExt::read_le_args(resource, resource_base)")]
     pub fn from_bytes(
         bytes: &[u8],
         resource: &[u8],
@@ -105,23 +32,9 @@ impl ModelSubresource {
         Ok(std::io::Cursor::new(bytes).read_le_args((resource, resource_base))?)
     }
 
+    #[deprecated(note = "use ModelSubresource.nodes")]
     pub fn primitives(&self) -> &[Nd] {
-        &self.primitives
-    }
-}
-
-#[derive(Debug)]
-struct MeshPrimitive {
-    root: Nd,
-}
-
-impl MeshPrimitive {
-    fn new(root: Nd) -> Self {
-        Self { root }
-    }
-
-    fn root(&self) -> &Nd {
-        &self.root
+        &self.nodes
     }
 }
 
@@ -130,113 +43,284 @@ impl binrw::BinRead for ModelSubresource {
 
     fn read_options<R: Read + Seek>(
         reader: &mut R,
-        endian: binrw::Endian,
+        _endian: binrw::Endian,
         args: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<Self> {
         let (resource_bytes, resource_base) = args;
 
-        // Model subres starts with 0x40, which points to 0x20 inside of the resource
-        let subresource_base = reader.read_u32::<LittleEndian>()?;
-
-        if subresource_base != 0x40 {
-            return Err(binrw::Error::BadMagic {
-                pos: reader.stream_position().unwrap_or_default(),
-                found: Box::new(subresource_base),
-            });
-        }
-
-        let mut reader =
-            std::io::Cursor::new(reader.bytes().skip(0x20).collect::<Result<Vec<_>, _>>()?);
+        // FIXME: make this more efficient
+        let mut reader = {
+            // Model subres starts with 0x40, which points to 0x20 inside of the resource
+            // => Skip 0x20 in and set that as zero
+            let begin_ptr = reader.read_u32::<LittleEndian>()?;
+            reader.seek(SeekFrom::Start(begin_ptr.into()))?;
+            std::io::Cursor::new(reader.bytes().collect::<Result<Vec<_>, _>>()?)
+        };
 
         let unknown1 = reader.read_u32::<LittleEndian>()?;
         let unknown2 = reader.read_u32::<LittleEndian>()?;
         let primitive_ptrs_start = reader.read_u32::<LittleEndian>()?;
         let primitive_count = reader.read_u32::<LittleEndian>()?;
-        let key_values_ptr = reader.read_u32::<LittleEndian>()?;
-        let unknown3 = reader.read_u32::<LittleEndian>()?;
+        let properties_ptr = reader.read_u32::<LittleEndian>()?;
 
-        let floats = reader.read_le::<[f32; 4]>()?;
+        let map2_ptr = reader.read_u32::<LittleEndian>()?;
+        if map2_ptr != 0 {
+            return Err(binrw::Error::AssertFail {
+                pos: reader.stream_position().unwrap_or(0),
+                message: "map2_ptr is not 0".to_owned(),
+            });
+        }
 
-        let key_value_map = {
-            if key_values_ptr == 0 {
+        let floats = reader.read_le()?;
+        let next_ptr = reader.read_le()?;
+        let model_model_root = reader.read_le()?;
+
+        let stream_end_position = reader.stream_position()?;
+
+        let properties = {
+            if properties_ptr == 0 {
                 Default::default()
             } else {
                 let mut reader = reader.clone();
-                reader.seek(SeekFrom::Start(key_values_ptr.into()))?;
+                reader.seek(SeekFrom::Start(properties_ptr.into()))?;
                 reader
                     .read_le::<ModelKeyValues>()?
                     .try_into()
                     .map_err(|e| binrw::Error::Custom {
                         pos: reader.stream_position().unwrap_or_default(),
-                        err: Box::new(format!("unable to get key value map: {e}")),
+                        err: Box::new(format!(
+                            "unable to convert model_properties to hashmap: {e}"
+                        )),
                     })?
             }
         };
 
         let primitive_ptrs: Vec<u32> = {
-            let mut primitive_cur = reader.clone();
-            primitive_cur.seek(SeekFrom::Start(primitive_ptrs_start as u64))?;
+            let mut reader = reader.clone();
+            reader.seek(SeekFrom::Start(primitive_ptrs_start as u64))?;
 
             (0..primitive_count as usize)
-                .map(|_| primitive_cur.read_u32::<LittleEndian>())
+                .map(|_| reader.read_u32::<LittleEndian>())
                 .collect::<Result<_, _>>()?
         };
 
-        let mrc = ModelReadContext::new(&key_value_map, resource_bytes);
+        let mrc = ModelReadContext::new(&properties, resource_bytes);
 
-        let mut primitives = vec![];
+        let mut nodes = vec![];
         for primitive_ptr in primitive_ptrs {
-            let mut reader_clone = reader.clone();
-            reader_clone.seek(SeekFrom::Start(primitive_ptr.into()))?;
-
+            let mut reader = reader.clone();
+            reader.seek(SeekFrom::Start(primitive_ptr.into()))?;
             let nd: Nd = reader.read_le_args((&mrc,))?;
-            primitives.push(nd);
+            nodes.push(nd);
         }
+
+        reader.seek(SeekFrom::Start(stream_end_position))?;
 
         Ok(Self {
             unknown1,
             unknown2,
-            unknown3,
             floats,
-            primitives,
-            key_value_map,
+            next_ptr,
+            model_model_root,
+            nodes,
+            properties,
         })
     }
 }
 
+impl binrw::BinWrite for ModelSubresource {
+    type Args<'a> = ModelWriteContext;
+
+    fn write_options<W: std::io::prelude::Write + Seek>(
+        &self,
+        writer: &mut W,
+        _endian: binrw::Endian,
+        mwc: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        let base = u32::try_from(writer.stream_position()?).map_err(br_error(writer))? + 0x20;
+
+        let subres = {
+            let mut subres = vec![];
+            let mut cur = std::io::Cursor::new(&mut subres);
+
+            let ModelSubresource {
+                unknown1,
+                unknown2,
+                floats,
+                next_ptr,
+                model_model_root,
+                nodes,
+                properties,
+            } = self;
+
+            cur.write_le(&unknown1)?;
+            cur.write_le(&unknown2)?;
+            // nodes ptr
+            cur.write_le(&0x30u32)?;
+            cur.write_le(&(self.nodes.len() as u32))?;
+            // properties
+            // TODO: CALCULATE THIS
+            cur.write_le(&0x4ab6u32)?;
+            // map2
+            cur.write_le(&0u32)?;
+
+            cur.write_le(&floats)?;
+            cur.write_le(&next_ptr)?;
+            cur.write_le(&model_model_root)?;
+
+            {
+                let ptrs_start = cur.stream_position()? as u32;
+                let mut nd_ptr = ptrs_start + 4 * nodes.len() as u32;
+
+                for node in nodes {
+                    nd_ptr = {
+                        cur.write_le(&nd_ptr)?;
+                        let restore = cur.stream_position()?;
+                        cur.seek(SeekFrom::Start(nd_ptr.into()))?;
+                        cur.write_le_args(node, mwc.clone())?;
+                        let write_end = cur.stream_position()?;
+                        cur.seek(SeekFrom::Start(restore))?;
+                        write_end as u32
+                    };
+                }
+
+                // Skip to after the nodes after writing them
+                cur.seek(SeekFrom::Start(nd_ptr.into()))?;
+            }
+
+            for (nd_offset, indices) in std::mem::take(&mut mwc.borrow_mut().rigid_entries) {
+                let ptr = cur.stream_position()? as u32;
+
+                cur.seek(SeekFrom::Start(nd_offset))?;
+                cur.write_le(&ptr)?;
+                cur.seek(SeekFrom::Start(ptr.into()))?;
+                cur.write_all(&indices)?;
+            }
+
+            cur.write_le(&ModelKeyValues::from(properties.clone()))?;
+
+            subres
+        };
+
+        let subres = (base + 0x20)
+            .to_le_bytes()
+            .into_iter()
+            .chain([0u8; 32 - 4])
+            .chain(subres)
+            .collect::<Vec<_>>();
+
+        writer.write_all(&subres)?;
+
+        Ok(())
+    }
+}
+
 #[binrw::binread]
-#[br(little)]
+#[br(little, stream = r)]
+#[derive(Clone, Debug, Default)]
 struct ModelKeyValues {
     #[br(temp)]
     num_key_values: u32,
-    #[br(temp)]
+    #[br(temp, assert(r.stream_position().is_ok_and(|v| v == u64::from(key_values_ptr))))]
     key_values_ptr: u32,
-    #[br(count = num_key_values, seek_before = SeekFrom::Start(key_values_ptr as u64))]
+    #[br(count = num_key_values)]
     key_values: Vec<ModelKeyValue>,
 }
 
-impl TryFrom<ModelKeyValues> for HashMap<String, Vec<u8>> {
+impl From<indexmap::IndexMap<String, Vec<u8>>> for ModelKeyValues {
+    fn from(value: indexmap::IndexMap<String, Vec<u8>>) -> Self {
+        let key_values = value
+            .into_iter()
+            .map(|(k, v)| ModelKeyValue {
+                key: k.into(),
+                value: v,
+            })
+            .collect();
+
+        Self { key_values }
+    }
+}
+
+impl TryFrom<ModelKeyValues> for indexmap::IndexMap<String, Vec<u8>> {
     type Error = crate::Error;
 
     fn try_from(value: ModelKeyValues) -> Result<Self, Self::Error> {
-        let mut hm = HashMap::new();
+        let mut hm = indexmap::IndexMap::new();
 
         for ModelKeyValue { key, value } in value.key_values {
-            hm.insert(String::from_utf8(key.value.0)?, value);
+            hm.insert(String::from_utf8(key.0)?, value);
         }
 
         Ok(hm)
     }
 }
 
+impl binrw::BinWrite for ModelKeyValues {
+    type Args<'a> = ();
+
+    fn write_options<W: std::io::prelude::Write + Seek>(
+        &self,
+        writer: &mut W,
+        _: binrw::Endian,
+        _: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        writer.write_le(&(self.key_values.len() as u32))?;
+
+        if self.key_values.is_empty() {
+            writer.write_le(&0u32)?;
+            return Ok(());
+        } else {
+            let entries_start = (writer.stream_position()? + 0x4) as u32;
+            writer.write_le(&entries_start)?;
+        }
+
+        let mut data_bytes = vec![];
+
+        let mut data_ptr = (self.key_values.len() as u64 * 12 + writer.stream_position()?) as u32;
+        for entry in &self.key_values {
+            let key_buf = {
+                let mut buf = entry.key.0.clone();
+                if buf.last() != Some(&0) {
+                    buf.push(0);
+                }
+                while buf.len() % 4 != 0 {
+                    buf.push(0xFD);
+                }
+                buf
+            };
+
+            dbg!(key_buf.len(), &key_buf);
+
+            // key_ptr
+            writer.write_le(&data_ptr)?;
+            data_ptr += key_buf.len() as u32;
+            data_bytes.extend(key_buf);
+
+            // value_ptr
+            writer.write_le(&data_ptr)?;
+            data_ptr += entry.value.len() as u32;
+            data_bytes.extend_from_slice(&entry.value);
+
+            // value_size
+            writer.write_le(&(entry.value.len() as u32))?;
+        }
+
+        writer.write_le(&data_bytes)?;
+
+        Ok(())
+    }
+}
+
 #[binrw::binread]
 #[br(little)]
+#[derive(Clone, Debug, Default)]
 struct ModelKeyValue {
-    key: binrw::FilePtr32<binrw::NullString>,
+    #[br(parse_with = binrw::FilePtr32::parse)]
+    key: binrw::NullString,
     #[br(temp)]
     value_ptr: u32,
     #[br(temp)]
     value_size: u32,
-    #[br(count = value_size, seek_before = SeekFrom::Start(value_ptr as u64))]
+    #[br(restore_position, count = value_size, seek_before = SeekFrom::Start(value_ptr as u64))]
     value: Vec<u8>,
 }

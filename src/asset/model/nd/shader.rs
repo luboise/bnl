@@ -131,7 +131,7 @@ pub struct NdShader2Data {
     #[br(if(pixel_shader_ptr_2 != 0), 
         seek_before = SeekFrom::Start(pixel_shader_ptr_2.into()))]
     pixel_shader_sub: Option<PixelShader>,
-    #[brw(magic = b"ndShader2\x00\x00")]
+    #[brw(magic = b"ndShader2\x00\x00\x00")]
     _magic: (),
 }
 

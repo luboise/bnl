@@ -8,10 +8,7 @@ pub use subresources::ModelSubresType;
 
 use subresources::*;
 
-use std::{
-    collections::HashMap,
-    io::{Cursor, Seek, SeekFrom},
-};
+use std::io::{Cursor, Seek, SeekFrom};
 
 use binrw::{BinRead, BinReaderExt, binrw};
 
@@ -111,8 +108,9 @@ impl Model {
         }
     }
 
-    pub fn key_value_map(&self) -> &HashMap<String, Vec<u8>> {
-        &self.model_subresource.key_value_map
+    #[deprecated(note = "use Model::properties")]
+    pub fn key_value_map(&self) -> &indexmap::IndexMap<String, Vec<u8>> {
+        &self.model_subresource.properties
     }
 }
 
@@ -165,7 +163,7 @@ impl TryFrom<crate::RawAssetData> for Model {
                 .get(start..end)
                 .ok_or("unable to get model subresource bytes")?;
 
-            ModelSubresource::from_bytes(subres_bytes, &resource, 0)?
+            std::io::Cursor::new(&subres_bytes).read_le_args((resource.as_slice(), 0))?
         };
 
         let mut model = Model {

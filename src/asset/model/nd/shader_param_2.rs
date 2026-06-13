@@ -149,6 +149,15 @@ impl binrw::BinWrite for ParamAssignments {
     }
 }
 
+
+#[binrw::binrw]
+#[derive(Clone, Debug)]
+pub struct PixelShaderMatrix {
+    matrix: [[f32; 4]; 4],
+    val1: u32,
+    val2: u32,
+}
+
 #[binrw::binrw]
 #[bw(stream = w)]
 #[derive(Debug, Clone)]
@@ -190,8 +199,9 @@ pub struct PixelShaderParams {
     unknown_1: u32,
 
     // 0x20
-    #[brw(magic = 0u32)]
-    _next_payload_magic: (), // Pointer to next payload???
+    #[br(assert(next_payload_ptr == 0))]
+    #[bw(calc = 0)]
+    next_payload_ptr: u32, // Pointer to next payload???
 
     #[br(temp)]
     #[bw(
@@ -224,10 +234,7 @@ pub struct PixelShaderParams {
 
     #[br(if(matrices_ptr != 0),
         count = num_matrices)]
-    pub matrices: Vec<[[f32; 4]; 4]>,
-
-    #[brw(if(!matrices.is_empty()), magic = b"\x07\x00\x00\x00\x01\x00\x00\x00")]
-    _extra_vals_magic: (),
+    pub matrices: Vec<PixelShaderMatrix>,
 
     #[br(if(texture_assignments_ptr != 0 && num_texture_assignments > 0),
         count = num_texture_assignments)]
@@ -250,11 +257,7 @@ impl PixelShaderParams {
             .map(|param_assignment| param_assignment.key_len() + 16)
             .sum::<i64>();
 
-        let v = v as i64 + param_assignments_size;
-
-        assert_eq!(v, 496);
-
-        v
+        v as i64 + param_assignments_size
     }
 
     pub fn attribute_map(&self) -> &indexmap::IndexMap<String, AttributeValue> {

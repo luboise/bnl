@@ -3,7 +3,7 @@ mod shader;
 mod shader_param_2;
 mod vertex_buffer;
 
-use binrw::{ BinWriterExt};
+use binrw::{BinReaderExt, BinWriterExt};
 pub use push_buffer::{DrawCall, NdPushBufferData};
 pub use vertex_buffer::*;
 
@@ -46,7 +46,7 @@ impl Serialize for Nd {
 #[brw(little)]
 #[derive(Debug, Clone)]
 pub struct Nd {
-    #[br(temp, try_calc = r.stream_position()?.try_into().map_err(br_error(r)))]
+    #[br(temp, try_calc = {r.stream_position()?.try_into().map_err(br_error(r))})]
     _base: u32,
     #[br(temp, assert(name_ptr != 0))]
     name_ptr: u32,
@@ -61,14 +61,8 @@ pub struct Nd {
     pub first_child_ptr: u32,
     #[br(temp)]
     pub next_sibling_ptr: u32,
-    #[br(temp, seek_before = SeekFrom::Current(-4),
-        calc = mrc.nd_heirarchy_ptrs.last().copied().unwrap_or(0))]
+    #[br(temp)]
     pub parent_ptr: u32,
-
-    #[br(temp)]
-    pub first_child_ptr: u32,
-    #[br(temp)]
-    pub next_sibling_ptr: u32,
 
     #[br(args(nd_type))]
     pub data: Box<NdData>,
@@ -78,113 +72,14 @@ pub struct Nd {
         restore_position,
         args(mrc))]
     pub first_child: Option<Box<Self>>,
-    #[br(if(first_child_ptr != 0),
+
+    #[br(if(next_sibling_ptr != 0),
         seek_before = SeekFrom::Start(next_sibling_ptr.into()), 
         restore_position,
         args(mrc),
         )]
     pub next_sibling: Option<Box<Self>>,
 }
-
-/*
-impl binrw::BinRead for Nd {
-    type Args<'a> = &'a ModelReadContext<'a>;
-
-    fn read_options<R: Read + Seek>(
-        reader: &mut R,
-        endian: binrw::Endian,
-        ctx: Self::Args<'_>,
-    ) -> binrw::prelude::BinResult<Self> {
-        let name_ptr = reader.read_u32::<LittleEndian>()?;
-
-        // TODO: Sanity check name against name ptr
-        let (_type_u16, unknown_u16) = (
-            reader.read_u16::<LittleEndian>()?,
-            reader.read_u16::<LittleEndian>()?,
-        );
-
-        let (
-            unknown_ptr1,
-            unknown_ptr2,
-            unknown_u32,
-            first_child_ptr,
-            next_sibling_ptr,
-            parent_ptr,
-        ) = (
-            reader.read_u32::<LittleEndian>()?,
-            reader.read_u32::<LittleEndian>()?,
-            reader.read_u32::<LittleEndian>()?,
-            reader.read_u32::<LittleEndian>()?,
-            reader.read_u32::<LittleEndian>()?,
-            reader.read_u32::<LittleEndian>()?,
-        );
-
-        let name = {
-            let old_pos = reader.stream_position()?;
-
-            // Processing
-            reader.seek(SeekFrom::Start(name_ptr as u64))?;
-
-            let mut chars = vec![];
-
-            let mut c = reader.read_u8()?;
-
-            while c != 0 {
-                chars.push(c);
-                c = reader.read_u8()?;
-            }
-
-            reader.seek(SeekFrom::Start(old_pos))?;
-
-            String::from_utf8(chars).map_err(br_error(reader))?
-        };
-
-        let nd_type: NdType = name.parse().map_err(br_error(reader))?;
-
-        let first_child = match first_child_ptr {
-            0 => None,
-            _ => {
-                let pos = reader.stream_position()?;
-                reader.seek(SeekFrom::Start(first_child_ptr.into()))?;
-                let child = Some(reader.read_le_args(ctx)?);
-                reader.seek(SeekFrom::Start(pos))?;
-                child
-            }
-        };
-
-        let next_sibling = match next_sibling_ptr {
-            0 => None,
-            _ => {
-                let pos = reader.stream_position()?;
-                reader.seek(SeekFrom::Start(next_sibling_ptr.into()))?;
-                let sibling = Some(reader.read_le_args(ctx)?);
-                reader.seek(SeekFrom::Start(pos))?;
-                sibling
-            }
-        };
-
-
-
-        let data = data.map_err(|e| binrw::Error::Custom {
-            pos: reader.stream_position().unwrap_or(0),
-            err: Box::new(format!("failed to get data for Nd: {e}")),
-        })?;
-
-        Ok(Self {
-            unknown_u16,
-            unknown_ptr1,
-            unknown_ptr2,
-            unknown_u32,
-            first_child_ptr,
-            next_sibling_ptr,
-            parent_ptr,
-            first_child,
-            next_sibling,
-            data: Box::new(data),
-        })
-    }
-}
-*/
 
 pub(crate) fn br_error<E: std::error::Error>(
     seeker: &mut impl std::io::Seek,
@@ -207,19 +102,32 @@ pub(crate) fn br_get_stream_pos(
         .ok_or("bad conversion".into())
 }
 
-#[derive(Default)]
-pub struct ModelWriteContext {
-    nd_heirarchy_ptrs: Vec<u32>
+
+pub type ModelWriteContext = std::rc::Rc<std::cell::RefCell<ModelWriteContextInner>>;
+
+pub fn new_write_context() -> ModelWriteContext {
+    ModelWriteContext::new(ModelWriteContextInner {
+        nd_heirarchy_ptrs: vec![],
+        resource: vec![],
+        rigid_entries: vec![]
+    }.into())
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelWriteContextInner {
+    pub nd_heirarchy_ptrs: Vec<u32>,
+    pub resource: Vec<u8>,
+    pub rigid_entries: Vec<(u64, Vec<u8>)>
 }
 
 impl binrw::BinWrite for Nd {
-    type Args<'a> = &'a mut ModelWriteContext;
+    type Args<'a> = ModelWriteContext;
 
     fn write_options<W: std::io::prelude::Write + Seek>(
         &self,
         writer: &mut W,
         _: binrw::Endian,
-        args: Self::Args<'_>,
+        mwc: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<()> {
         let base = writer.stream_position()?;
 
@@ -249,30 +157,32 @@ impl binrw::BinWrite for Nd {
         // first child, sibling, prev
         writer.write_le(&0u32)?;
         writer.write_le(&0u32)?;
-        writer.write_le(&0u32)?;
-        writer.write_le(data)?;
+
+        let parent = mwc.borrow().nd_heirarchy_ptrs.last().copied().unwrap_or(0);
+        writer.write_le(&parent)?;
+
+        writer.write_le_args(data, mwc.clone())?;
 
         if let Some(first_child) = first_child {
-            args.nd_heirarchy_ptrs.push(base as u32);
+            mwc.borrow_mut().nd_heirarchy_ptrs.push(base as u32);
             // go write the pointer before writing the child
             let first_child_ptr = writer.stream_position()? as u32;
             seek_and_write(writer, SeekFrom::Start(base + 4 * 5), &first_child_ptr)?;
-            first_child.write_le_args(writer, args)?;
-            args.nd_heirarchy_ptrs.pop();
+            first_child.write_le_args(writer, mwc.clone())?;
+            mwc.borrow_mut().nd_heirarchy_ptrs.pop();
         }
         if let Some(next_sibling) = next_sibling {
-            args.nd_heirarchy_ptrs.push(base as u32);
             let next_sibling_ptr = writer.stream_position()? as u32;
             seek_and_write(writer, SeekFrom::Start(base + 4 * 6), &next_sibling_ptr)?;
-            next_sibling.write_le_args(writer, args)?;
-            args.nd_heirarchy_ptrs.pop();
+            next_sibling.write_le_args(writer, mwc.clone())?;
         }
 
         Ok(())
     }
 }
 
-fn seek_and_write<W, T>(writer: &mut W, seek_from: SeekFrom, data: &T) -> Result<(), binrw::error::Error> 
+/// Seeks, writes, gets position of writer then restores
+pub fn seek_and_write<W, T>(writer: &mut W, seek_from: SeekFrom, data: &T) -> Result<u64, binrw::error::Error> 
 where
     W: std::io::Seek + std::io::Write,
     T: binrw::BinWrite, for<'a> <T as binrw::BinWrite>::Args<'a>: std::default::Default {
@@ -280,9 +190,10 @@ where
 
     writer.seek(seek_from)?;
     data.write_le(writer)?;
-    writer.seek(SeekFrom::Start(cur));
+    let write_end = writer.stream_position()?;
+    writer.seek(SeekFrom::Start(cur))?;
 
-    Ok(())
+    Ok(write_end)
 }
 
 impl Nd {
@@ -340,8 +251,9 @@ pub enum NdType {
 }
 
 #[derive(Debug, Clone)]
-#[binrw::binrw]
+#[binrw::binread]
 #[br(import(nd_type: NdType))]
+#[bw(import(mwc: ModelWriteContext))]
 pub enum NdData {
     #[br(pre_assert(nd_type == NdType::Skeleton))]
     Skeleton(NdSkeletonData),
@@ -351,8 +263,8 @@ pub enum NdData {
     PushBuffer(NdPushBufferData),
     #[br(pre_assert(nd_type == NdType::BGPushBuffer))]
     BGPushBuffer(NdBGPushBufferData),
-    #[br(pre_assert(nd_type == NdType::Group))]
-    Group,
+    // #[br(pre_assert(nd_type == NdType::Group))]
+    // Group,
     #[br(pre_assert(nd_type == NdType::Shader2))]
     Shader2(NdShader2Data),
     #[br(pre_assert(nd_type == NdType::VertexShader))]
@@ -361,10 +273,34 @@ pub enum NdData {
     ShaderParam2(NdShaderParam2Data),
     #[br(pre_assert(nd_type == NdType::MtxArray))]
     MtxArray(NdMtxArrayData),
-    Unknown(
-        NdType,
-        #[br(parse_with = binrw::helpers::until_eof)] Vec<u8>,
-    ),
+    #[br(pre_assert(nd_type == NdType::RigidSkinIdx))]
+    RigidSkin(NdRigidSkinIdxData),
+}
+
+impl binrw::BinWrite for NdData {
+    type Args<'a> = ModelWriteContext;
+
+    fn write_options<W: std::io::prelude::Write + Seek>(
+        &self,
+        writer: &mut W,
+        _: binrw::Endian,
+        mwc: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        match self {
+            NdData::Skeleton(data) => data.write_le(writer)?,
+            NdData::VertexBuffer(data) => data.write_le(writer)?,
+            NdData::PushBuffer(data) => data.write_le(writer)?,
+            NdData::BGPushBuffer(data) => data.write_le(writer)?,
+            NdData::Shader2(data) => data.write_le(writer)?,
+            NdData::VertexShader(data) => data.write_le(writer)?,
+            NdData::ShaderParam2(data) => data.write_le(writer)?,
+            NdData::MtxArray(data) => data.write_le(writer)?,
+            NdData::RigidSkin(data) => data.write_le_args(writer, mwc)?,
+            // NdData::Group => data.write_le(writer)?,
+        }
+
+        Ok(())
+    }
 }
 
 impl NdData {
@@ -374,12 +310,12 @@ impl NdData {
             NdData::VertexBuffer { .. } => NdType::VertexBuffer,
             NdData::PushBuffer(_) => NdType::PushBuffer,
             NdData::BGPushBuffer { .. } => NdType::BGPushBuffer,
-            NdData::Group => NdType::Group,
+            // NdData::Group => NdType::Group,
             NdData::Shader2(_) => NdType::Shader2,
             NdData::VertexShader(_) => NdType::VertexShader,
             NdData::ShaderParam2(_) => NdType::ShaderParam2,
             NdData::MtxArray(_) => NdType::MtxArray,
-            NdData::Unknown(nd_type, ..) => *nd_type,
+            NdData::RigidSkin(_) => NdType::RigidSkinIdx,
         }
     }
 
@@ -391,12 +327,12 @@ impl NdData {
             }
             NdData::PushBuffer(..) => 0x20,
             NdData::BGPushBuffer(..) => todo!(),
-            NdData::Group => todo!(),
+            // NdData::Group => todo!(),
             NdData::Shader2(data) => data.name_offset(),
             NdData::VertexShader(..) => 0x48,
             NdData::ShaderParam2(data) => data.name_offset(),
-            NdData::Unknown(..) => todo!(),
             NdData::MtxArray(data) => data.name_offset(),
+            NdData::RigidSkin(..) => 8,
         }
     }
 }
@@ -439,21 +375,21 @@ impl<'a> Iterator for NdIterator<'a> {
 
 pub struct ModelReadContext<'a> {
     nd_heirarchy_ptrs: Vec<u32>,
-    key_value_map: &'a HashMap<String, Vec<u8>>,
+    properties: &'a indexmap::IndexMap<String, Vec<u8>>,
     resource: &'a [u8],
 }
 
 impl<'a> ModelReadContext<'a> {
-    pub fn new(key_value_map: &'a HashMap<String, Vec<u8>>, resource: &'a [u8]) -> Self {
+    pub fn new(properties: &'a indexmap::IndexMap<String, Vec<u8>>, resource: &'a [u8]) -> Self {
         Self {
             nd_heirarchy_ptrs: vec![],
-            key_value_map,
+            properties,
             resource,
         }
     }
 
     pub fn get_bone_name(&self, bone_index: u32) -> Option<&str> {
-        self.key_value_map.iter().find_map(|(k, v)| {
+        self.properties.iter().find_map(|(k, v)| {
             (is_bone_name(k)
                 && v.len() == 4
                 && u32::from_le_bytes(v.as_slice().try_into().unwrap()) == bone_index)
@@ -569,6 +505,76 @@ impl NdMtxArrayData {
         v as i64
     }
 }
+
+#[binrw::parser(reader)]
+fn parse_rigid_indices() -> binrw::BinResult<Vec<u8>> {
+    let indices_ptr = reader.read_le::<u32>()?;
+    let num_indices = reader.read_le::<u32>()?;
+
+    if indices_ptr == 0 {
+        return Err(binrw::Error::AssertFail { 
+            pos: reader.stream_position().unwrap_or(0), 
+            message: "indices_ptr is 0".to_owned() 
+        });
+    }
+    if num_indices == 0 {
+        return Err(binrw::Error::AssertFail { 
+            pos: reader.stream_position().unwrap_or(0), 
+            message: "num_indices is 0".to_owned()
+        });
+    }
+
+    let pos = reader.stream_position()?;
+
+    reader.seek(SeekFrom::Start(indices_ptr.into()))?;
+
+
+    let mut indices = vec![0u8; num_indices as usize];
+    reader.read_exact(&mut indices)?;
+    reader.seek(SeekFrom::Start(pos))?;
+
+    Ok(indices)
+}
+
+#[binrw::writer(writer)]
+fn write_rigid_indices(data: &Vec<u8>) -> binrw::BinResult<()> {
+    writer.write_le(&0u32);
+    Ok(())
+}
+
+
+#[derive(Clone, Debug)]
+#[binrw::binread]
+#[expect(clippy::manual_non_exhaustive)]
+pub struct NdRigidSkinIdxData {
+    #[br(parse_with = parse_rigid_indices)]
+    pub indices: Vec<u8>,
+    #[brw(magic = b"ndRigidSkinIdx\x00\x00")]
+    _name: ()
+}
+
+impl binrw::BinWrite for NdRigidSkinIdxData {
+    type Args<'a> = ModelWriteContext;
+
+    fn write_options<W: std::io::prelude::Write + Seek>(
+        &self,
+        writer: &mut W,
+        _: binrw::Endian,
+        mwc: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        let pos = writer.stream_position()?;
+        mwc.borrow_mut().rigid_entries.push((pos, self.indices.clone()));
+
+        writer.write_le(&0u32)?;
+        writer.write_le(&(self.indices.len() as u32))?;
+
+        writer.write_all(b"ndRigidSkinIdx\x00\x00")?;
+
+        Ok(())
+    }
+}
+
+
 
 #[path = "./nd_tests.rs"]
 #[cfg(test)]
