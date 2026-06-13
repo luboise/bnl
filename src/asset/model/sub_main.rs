@@ -162,7 +162,7 @@ impl binrw::BinRead for ModelSubresource {
                 Default::default()
             } else {
                 let mut reader = reader.clone();
-                reader.seek(SeekFrom::Start(key_values_ptr.into()));
+                reader.seek(SeekFrom::Start(key_values_ptr.into()))?;
                 reader
                     .read_le::<ModelKeyValues>()?
                     .try_into()
@@ -182,14 +182,14 @@ impl binrw::BinRead for ModelSubresource {
                 .collect::<Result<_, _>>()?
         };
 
-        let mrc = ModelReadContext::new(&key_value_map, &resource_bytes);
+        let mrc = ModelReadContext::new(&key_value_map, resource_bytes);
 
         let mut primitives = vec![];
         for primitive_ptr in primitive_ptrs {
             let mut reader_clone = reader.clone();
             reader_clone.seek(SeekFrom::Start(primitive_ptr.into()))?;
 
-            let nd = reader.read_le_args::<Nd>(&mrc)?;
+            let nd: Nd = reader.read_le_args((&mrc,))?;
             primitives.push(nd);
         }
 

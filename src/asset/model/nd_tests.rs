@@ -1,5 +1,7 @@
 use std::{fs, io::Write};
 
+use binrw::BinReaderExt;
+
 use super::*;
 
 fn get_test_bytes() -> Vec<u8> {
@@ -24,7 +26,7 @@ fn nd_parse() -> Result<(), Box<dyn std::error::Error>> {
     let def2 = Default::default();
     let mrc = ModelReadContext::new(&def1, def2);
 
-    let _: Nd = cur.read_le_args(&mrc)?;
+    let _: Nd = cur.read_le_args((&mrc,))?;
     Ok(())
 }
 
@@ -79,13 +81,13 @@ fn stream_test(offset: usize, nd_bytes: &[u8]) -> Result<(), Box<dyn std::error:
 
     let mrc = crate::asset::model::nd::ModelReadContext::new(&x, &[]);
 
-    let nd = read_cur.read_le_args::<crate::asset::model::nd::Nd>(&mrc)?;
+    let nd: Nd = read_cur.read_le_args((&mrc,))?;
 
     let mut output = vec![];
     let mut write_cur = std::io::Cursor::new(&mut output);
     write_cur.write_all(&zeroes)?;
 
-    write_cur.write_le(&nd)?;
+    write_cur.write_le_args(&nd, &mut Default::default())?;
 
     compare_streams(&input, &output);
 
