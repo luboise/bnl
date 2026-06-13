@@ -172,8 +172,18 @@ impl Mod {
                         if let Ok(res) = std::fs::read(raw_override_dir.join("resource")) {
                             res
                         } else {
-                            // TODO: Make this read multiple resource chunks
-                            std::fs::read(raw_override_dir.join("resource0")).unwrap_or_default()
+                            let mut bytes = vec![];
+
+                            for i in 0..i32::MAX {
+                                let Ok(file) =
+                                    std::fs::read(raw_override_dir.join(format!("resource{i}")))
+                                else {
+                                    break;
+                                };
+                                bytes.extend(file);
+                            }
+
+                            bytes
                         }
                     };
 

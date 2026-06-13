@@ -1,5 +1,6 @@
 mod push_buffer;
 mod shader;
+mod shader_param_2;
 mod vertex_buffer;
 
 use binrw::{BinReaderExt, BinWriterExt, binrw};
@@ -7,11 +8,6 @@ pub use push_buffer::{DrawCall, NdPushBufferData};
 pub use vertex_buffer::*;
 
 pub(crate) mod prelude {
-    pub use serde::ser::SerializeMap;
-
-    // Internal
-    pub use super::ModelSlice;
-
     pub(crate) use byteorder::{LittleEndian, ReadBytesExt};
 }
 
@@ -22,7 +18,9 @@ use std::{
 
 use serde::{Serialize, ser::SerializeMap};
 
-use crate::asset::model::nd::{
+use crate::asset::model::nd::shader_param_2::NdShaderParam2Data;
+
+use {
     push_buffer::NdBGPushBufferData,
     shader::{NdShader2Data, NdVertexShaderData},
 };
@@ -148,31 +146,7 @@ impl binrw::BinRead for Nd {
             NdType::PushBuffer => Ok(NdData::PushBuffer(reader.read_le()?)),
             NdType::BGPushBuffer => Ok(NdData::BGPushBuffer(reader.read_le()?)),
             NdType::Group => Ok(NdData::Group),
-            NdType::ShaderParam2 => {
-                todo!()
-                /*
-                let main_payload_ptr = reader.read_u32::<LittleEndian>()?;
-                let sub_payload_ptr = reader.read_u32::<LittleEndian>()?;
-
-                let main_payload = NdShaderParam2Payload::from_model_slice(&ModelSlice {
-                    slice: bytes,
-                    read_start: main_payload_ptr as usize,
-                })?;
-
-                let sub_payload = match sub_payload_ptr {
-                    0 => None,
-                    val => Some(NdShaderParam2Payload::from_model_slice(&ModelSlice {
-                        slice: bytes,
-                        read_start: val as usize,
-                    })?),
-                };
-
-                Ok(NdData::ShaderParam2 {
-                    main_payload,
-                    sub_payload,
-                })
-                */
-            }
+            NdType::ShaderParam2 => Ok(NdData::ShaderParam2(reader.read_le()?)),
             NdType::Skeleton => Ok(NdData::Skeleton(reader.read_le()?)),
             NdType::Shader2 => Ok(NdData::Shader2(reader.read_le()?)),
             NdType::VertexShader => Ok(NdData::VertexShader(reader.read_le()?)),
@@ -209,6 +183,18 @@ pub(crate) fn br_error<E: std::error::Error>(
         pos: seeker.stream_position().unwrap_or(0),
         err: Box::new(format!("failed to get data for Nd: {e}")),
     }
+}
+
+pub(crate) fn br_get_stream_pos(
+    seeker: &mut impl std::io::Seek,
+    struct_offset: u32,
+) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+    seeker
+        .stream_position()
+        .ok()
+        .and_then(|v| u32::try_from(v).ok())
+        .map(|v| v - struct_offset)
+        .ok_or("bad conversion".into())
 }
 
 impl binrw::BinWrite for Nd {
@@ -319,7 +305,7 @@ pub enum NdData {
     Group,
     Shader2(NdShader2Data),
     VertexShader(NdVertexShaderData),
-    ShaderParam2,
+    ShaderParam2(NdShaderParam2Data),
     MtxArray(NdMtxArrayData),
     Unknown(
         NdType,
@@ -337,7 +323,7 @@ impl NdData {
             NdData::Group => NdType::Group,
             NdData::Shader2(_) => NdType::Shader2,
             NdData::VertexShader(_) => NdType::VertexShader,
-            NdData::ShaderParam2 => NdType::ShaderParam2,
+            NdData::ShaderParam2(_) => NdType::ShaderParam2,
             NdData::MtxArray(_) => NdType::MtxArray,
             NdData::Unknown(nd_type, ..) => *nd_type,
         }
@@ -350,12 +336,12 @@ impl NdData {
                 8 + nd_vertex_buffer_data.resource_views.len() as i64 * 0x18
             }
             NdData::PushBuffer(..) => 0x20,
-            NdData::BGPushBuffer(nd_bgpush_buffer_data) => todo!(),
+            NdData::BGPushBuffer(..) => todo!(),
             NdData::Group => todo!(),
             NdData::Shader2(data) => data.name_offset(),
-            NdData::VertexShader(nd_vertex_shader_data) => 0x48,
-            NdData::ShaderParam2 => todo!(),
-            NdData::Unknown(nd_type, items) => todo!(),
+            NdData::VertexShader(..) => 0x48,
+            NdData::ShaderParam2(data) => data.name_offset(),
+            NdData::Unknown(..) => todo!(),
             NdData::MtxArray(data) => data.name_offset(),
         }
     }
