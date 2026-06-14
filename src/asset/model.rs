@@ -163,7 +163,10 @@ impl TryFrom<crate::RawAssetData> for Model {
                 .get(start..end)
                 .ok_or("unable to get model subresource bytes")?;
 
-            std::io::Cursor::new(&subres_bytes).read_le_args((resource.as_slice(), 0))?
+            let mut cur = std::io::Cursor::new(&descriptor_bytes);
+            cur.seek_relative(start.try_into()?)?;
+
+            cur.read_le_args((resource.as_slice(), 0))?
         };
 
         let mut model = Model {
@@ -229,11 +232,12 @@ impl TryFrom<crate::RawAssetData> for Model {
                     model.subresource0x5 = Some(subresource_bytes.to_owned());
                 }
                 ModelSubresType::Collision => {
-                    let mut cur = Cursor::new(&descriptor_bytes);
-                    cur.seek(SeekFrom::Start(ptr as u64))?;
-
-                    let collision_subresource = cur.read_le()?;
-                    model.collision_subresource = Some(collision_subresource);
+                    ()
+                    // let mut cur = Cursor::new(&descriptor_bytes);
+                    // cur.seek(SeekFrom::Start(ptr as u64))?;
+                    //
+                    // let collision_subresource = cur.read_le()?;
+                    // model.collision_subresource = Some(collision_subresource);
                 }
                 ModelSubresType::Texture => {
                     let textures_subresource =
@@ -590,3 +594,7 @@ impl TexturedModel {
     }
 }
 */
+
+#[cfg(test)]
+#[path = "./model_tests.rs"]
+mod tests;
