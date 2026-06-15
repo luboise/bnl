@@ -10,4 +10,10 @@ pub(crate) fn compare_streams(expected: &[u8], received: &[u8]) {
             &received[i.saturating_sub(4)..i + 8]
         );
     }
+
+    assert_eq!(
+        expected.len(),
+        received.len(),
+        "Expected and received are different lengths"
+    );
 }

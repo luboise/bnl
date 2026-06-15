@@ -20,6 +20,7 @@ use crate::asset::texture;
     num_enum::TryFromPrimitive,
     num_enum::IntoPrimitive,
     strum::EnumString,
+    strum::EnumIter,
     strum::Display,
 )]
 pub enum ModelSubresType {
@@ -31,7 +32,7 @@ pub enum ModelSubresType {
     Matrices = 0x05,
     Collision = 0x06,
     Texture = 0x07,
-    Unknown8 = 0x08,
+    Unknown0x08 = 0x08,
     BoneIndices = 0x09,
     Transforms = 0x0a,
     Unknown0x0b = 0x0b,
@@ -59,56 +60,66 @@ pub type Subresource0x5 = Vec<u8>;
 pub struct TexturesSubresource {
     pub textures: Vec<crate::asset::texture::Texture>,
 }
+impl binrw::BinRead for TexturesSubresource {
+    type Args<'a> = super::nd::ModelReadContext<'a>;
 
-impl TexturesSubresource {
-    pub fn new(
-        data: &[u8],
-        descriptor_base: u32,
-        resource: &[u8],
-        resource_base: u32,
-    ) -> Result<Self, crate::Error> {
-        let mut cur = std::io::Cursor::new(data);
+    fn read_options<R: std::io::prelude::Read + Seek>(
+        reader: &mut R,
+        _: binrw::Endian,
+        mrc: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<Self> {
+        let num_textures = reader.read_u32::<LittleEndian>()?;
+        let tex_ptr_ptr = reader.read_u32::<LittleEndian>()?;
 
-        let num_textures = cur.read_u32::<LittleEndian>()?;
-        let tex_ptr_ptr = cur
-            .read_u32::<LittleEndian>()?
-            .checked_sub(descriptor_base)
-            .ok_or("invalid tex ptr with descriptor base")?;
-
-        cur.seek(SeekFrom::Start(tex_ptr_ptr.try_into()?))?;
+        reader.seek(SeekFrom::Start(tex_ptr_ptr.into()))?;
 
         let tex_offset_ptrs = (0..num_textures)
-            .map(|_| {
-                cur.read_u32::<LittleEndian>().and_then(|v| {
-                    v.checked_sub(descriptor_base)
-                        .ok_or_else(|| std::io::Error::other("failed to sub".to_owned()))
-                })
-            })
+            .map(|_| reader.read_u32::<LittleEndian>())
             .collect::<Result<Vec<_>, _>>()?;
 
         let textures = tex_offset_ptrs
             .into_iter()
             .map(|tex_offset_ptr| {
-                cur.seek(SeekFrom::Start(tex_offset_ptr.try_into()?));
-                let tex_desc = cur.read_le::<texture::TextureDescriptor>()?;
+                reader.seek(SeekFrom::Start(tex_offset_ptr.into()))?;
+                let tex_desc = reader.read_le::<texture::TextureDescriptor>()?;
 
-                let res_start = usize::try_from(tex_desc.texture_offset)?
-                    .checked_sub(resource_base.try_into()?)
-                    .ok_or("sub out of range")?;
+                let res_start = usize::try_from(tex_desc.texture_offset)?;
 
                 let res_end = res_start
                     .checked_add(tex_desc.texture_size.try_into()?)
                     .ok_or("tex size add out of range")?;
 
-                let tex_res = resource
+                let tex_res = mrc
+                    .resource
                     .get(res_start..res_end)
                     .ok_or("failed to get texture res")?;
 
                 Ok(texture::Texture::new(tex_desc, tex_res.to_vec()))
             })
-            .collect::<Result<Vec<_>, crate::Error>>()?;
+            .collect::<Result<Vec<_>, crate::Error>>()
+            .map_err(|e| binrw::Error::Custom {
+                pos: reader.stream_position().unwrap_or(0),
+                err: Box::new(format!("failed to get data for Nd: {e}")),
+            })?;
 
         Ok(Self { textures })
+    }
+}
+
+impl TexturesSubresource {
+    #[deprecated(note = "use BinReaderExt::read_le_args(ModelReadContext)")]
+    pub fn new(
+        data: &[u8],
+        descriptor_base: u32,
+        resource: &[u8],
+        _resource_base: u32,
+    ) -> Result<Self, crate::Error> {
+        let mut cur = std::io::Cursor::new(data);
+        cur.seek(SeekFrom::Start(descriptor_base.into()))?;
+        Ok(cur.read_le_args(super::nd::ModelReadContext {
+            properties: &Default::default(),
+            resource,
+        })?)
     }
 
     pub fn serialize(

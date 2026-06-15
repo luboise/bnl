@@ -2,9 +2,7 @@ use binrw::{BinReaderExt, BinWriterExt};
 use byteorder::{LittleEndian, ReadBytesExt};
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use crate::asset::model::nd::{
-    ModelReadContext, ModelWriteContext, Nd, br_error, new_write_context,
-};
+use crate::asset::model::nd::{ModelReadContext, ModelWriteContext, Nd, br_error};
 
 #[derive(Clone, Debug)]
 pub struct ModelSubresource {
@@ -23,13 +21,16 @@ pub struct ModelSubresource {
 }
 
 impl ModelSubresource {
-    #[deprecated(note = "use BinReaderExt::read_le_args(resource, resource_base)")]
+    #[deprecated(note = "use BinReaderExt::read_le_args(ModelReadContext)")]
     pub fn from_bytes(
         bytes: &[u8],
         resource: &[u8],
-        resource_base: u32,
+        _resource_base: u32,
     ) -> Result<Self, crate::Error> {
-        Ok(std::io::Cursor::new(bytes).read_le_args((resource, resource_base))?)
+        Ok(std::io::Cursor::new(bytes).read_le_args(ModelReadContext {
+            properties: &Default::default(),
+            resource,
+        })?)
     }
 
     #[deprecated(note = "use ModelSubresource.nodes")]
@@ -39,14 +40,17 @@ impl ModelSubresource {
 }
 
 impl binrw::BinRead for ModelSubresource {
-    type Args<'a> = (&'a [u8], u32);
+    type Args<'a> = ModelReadContext<'a>;
 
     fn read_options<R: Read + Seek>(
         reader: &mut R,
         _endian: binrw::Endian,
-        args: Self::Args<'_>,
+        mrc: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<Self> {
-        let (resource_bytes, resource_base) = args;
+        let ModelReadContext {
+            properties: _,
+            resource,
+        } = mrc;
 
         // FIXME: make this more efficient
         let mut reader = {
@@ -104,13 +108,13 @@ impl binrw::BinRead for ModelSubresource {
                 .collect::<Result<_, _>>()?
         };
 
-        let mrc = ModelReadContext::new(&properties, resource_bytes);
+        let mrc = ModelReadContext::new(&properties, resource);
 
         let mut nodes = vec![];
         for primitive_ptr in primitive_ptrs {
             let mut reader = reader.clone();
             reader.seek(SeekFrom::Start(primitive_ptr.into()))?;
-            let nd: Nd = reader.read_le_args((&mrc,))?;
+            let nd: Nd = reader.read_le_args((mrc,))?;
             nodes.push(nd);
         }
 
@@ -137,7 +141,7 @@ impl binrw::BinWrite for ModelSubresource {
         _endian: binrw::Endian,
         mwc: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<()> {
-        let base = u32::try_from(writer.stream_position()?).map_err(br_error(writer))? + 0x20;
+        let base = u32::try_from(writer.stream_position()?).map_err(br_error(writer))?;
 
         let subres = {
             let mut subres = vec![];
@@ -288,8 +292,6 @@ impl binrw::BinWrite for ModelKeyValues {
                 }
                 buf
             };
-
-            dbg!(key_buf.len(), &key_buf);
 
             // key_ptr
             writer.write_le(&data_ptr)?;

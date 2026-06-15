@@ -1,7 +1,8 @@
-use binrw::BinReaderExt;
+use std::io::{Read, Seek, SeekFrom};
+
+use binrw::{BinReaderExt, BinWriterExt};
 
 #[derive(Debug, Clone, serde::Serialize)]
-#[binrw::binrw]
 pub struct VertexBufferResourceView {
     stride: u8,
     view_type: VertexBufferViewType,
@@ -13,21 +14,112 @@ pub struct VertexBufferResourceView {
     unknown_u32_2: u32,
     unknown_u32_3: u32,
 
-    // 0x10
-    view_start: u32,
-    view_size: u32,
+    resource_start: u32,
+    resource: Vec<u8>,
+}
+
+impl binrw::BinRead for VertexBufferResourceView {
+    type Args<'a> = crate::asset::model::nd::ModelReadContext<'a>;
+
+    fn read_options<R: std::io::prelude::Read + std::io::prelude::Seek>(
+        reader: &mut R,
+        _endian: binrw::Endian,
+        mrc: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<Self> {
+        let stride = reader.read_le()?;
+        let view_type = reader.read_le()?;
+        let unknown_u16 = reader.read_le()?;
+        let unknown_u32_1 = reader.read_le()?;
+        let unknown_u32_2 = reader.read_le()?;
+        let unknown_u32_3 = reader.read_le()?;
+
+        let resource_start = reader.read_le::<u32>()?;
+        let resource_size = reader.read_le::<u32>()?;
+
+        let mut res_cur = std::io::Cursor::new(mrc.resource);
+
+        res_cur.seek(SeekFrom::Start(resource_start.into()))?;
+
+        let mut resource = vec![0u8; resource_size as usize];
+
+        res_cur.read_exact(&mut resource)?;
+
+        Ok(Self {
+            stride,
+            view_type,
+            unknown_u16,
+            unknown_u32_1,
+            unknown_u32_2,
+            unknown_u32_3,
+            resource_start,
+            resource,
+        })
+    }
+}
+
+impl binrw::BinWrite for VertexBufferResourceView {
+    type Args<'a> = crate::asset::model::nd::ModelWriteContext;
+
+    fn write_options<W: std::io::prelude::Write + Seek>(
+        &self,
+        writer: &mut W,
+        _: binrw::Endian,
+        mwc: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        let Self {
+            stride,
+            view_type,
+            unknown_u16,
+            unknown_u32_1,
+            unknown_u32_2,
+            unknown_u32_3,
+            resource_start,
+            resource,
+        } = self;
+
+        writer.write_le(stride)?;
+        writer.write_le(view_type)?;
+        writer.write_le(unknown_u16)?;
+        writer.write_le(unknown_u32_1)?;
+        writer.write_le(unknown_u32_2)?;
+        writer.write_le(unknown_u32_3)?;
+
+        if !resource.is_empty() {
+            let mut mwc = mwc.borrow_mut();
+
+            let cur_start = mwc.resource.len() as u64;
+
+            let mut res = std::io::Cursor::new(&mut mwc.resource);
+
+            res.seek(SeekFrom::Start(cur_start))?;
+
+            if u64::from(*resource_start) != res.stream_position()? {
+                return Err(binrw::Error::AssertFail {
+                    pos: res.stream_position().unwrap_or(0),
+                    message: format!(
+                        "unable to write resource at 0x{:x} (head is actually at 0x{:x})",
+                        resource_start,
+                        res.stream_position()?,
+                    ),
+                });
+            }
+
+            res.write_le(resource)?;
+        }
+
+        writer.write_le(resource_start)?;
+        writer.write_le(&(resource.len() as u32))?;
+
+        Ok(())
+    }
 }
 
 impl VertexBufferResourceView {
     pub fn from_reader<R: std::io::Read + std::io::Seek>(
         reader: &mut R,
+        mrc: crate::asset::model::nd::ModelReadContext<'_>,
     ) -> Result<Self, crate::Error> {
-        Ok(reader.read_le()?)
-    }
-
-    #[deprecated(note = "use from_reader(&mut Cursor)")]
-    pub fn from_cursor(cur: &mut std::io::Cursor<&[u8]>) -> Result<Self, crate::Error> {
-        Self::from_reader(cur)
+        Ok(reader.read_le_args(mrc)?)
     }
 
     pub fn add_to_gltf(
@@ -37,7 +129,7 @@ impl VertexBufferResourceView {
     ) -> Result<gltf_writer::GltfIndex, std::io::Error> {
         match self.view_type {
             VertexBufferViewType::Vertex => {
-                let num_vertices = self.view_size / 12;
+                let num_vertices = self.resource.len() / 12;
 
                 Ok(gltf.add_accessor(gltf_writer::gltf::Accessor::new(
                     buffer_view_index,
@@ -49,7 +141,7 @@ impl VertexBufferResourceView {
                 )))
             }
             VertexBufferViewType::UV => {
-                let num_vertices = self.view_size / 8;
+                let num_vertices = self.resource.len() / 8;
 
                 Ok(gltf.add_accessor(gltf_writer::gltf::Accessor::new(
                     buffer_view_index,
@@ -76,7 +168,7 @@ impl VertexBufferResourceView {
     }
 
     pub fn len(&self) -> usize {
-        self.view_size as usize
+        self.resource.len()
     }
 
     #[must_use]
@@ -89,17 +181,17 @@ impl VertexBufferResourceView {
     }
 
     pub fn start(&self) -> u32 {
-        self.view_start
+        self.resource_start
     }
 
     pub fn end(&self) -> u32 {
-        self.view_start + self.view_size
+        self.resource_start + self.resource.len() as u32
     }
 
     /// Number of entries in this resource view
     /// Equal by length / stride
     pub fn num_entries(&self) -> usize {
-        (self.view_size / u32::from(self.stride)) as usize
+        (self.resource.len() as u32 / u32::from(self.stride)) as usize
     }
 
     pub fn view_type(&self) -> VertexBufferViewType {

@@ -12,7 +12,7 @@ pub(crate) mod prelude {
 }
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{VecDeque},
     io::{Seek, SeekFrom},
 };
 
@@ -42,7 +42,7 @@ impl Serialize for Nd {
 }
 
 #[binrw::binread]
-#[br(stream = r, import(mrc: &ModelReadContext<'_>))]
+#[br(stream = r, import(mrc: ModelReadContext<'_>))]
 #[brw(little)]
 #[derive(Debug, Clone)]
 pub struct Nd {
@@ -64,7 +64,7 @@ pub struct Nd {
     #[br(temp)]
     pub parent_ptr: u32,
 
-    #[br(args(nd_type))]
+    #[br(args(mrc, nd_type))]
     pub data: Box<NdData>,
 
     #[br(if(first_child_ptr != 0),
@@ -252,13 +252,16 @@ pub enum NdType {
 
 #[derive(Debug, Clone)]
 #[binrw::binread]
-#[br(import(nd_type: NdType))]
+#[br(import(mrc: ModelReadContext<'_>, nd_type: NdType))]
 #[bw(import(mwc: ModelWriteContext))]
 pub enum NdData {
     #[br(pre_assert(nd_type == NdType::Skeleton))]
     Skeleton(NdSkeletonData),
     #[br(pre_assert(nd_type == NdType::VertexBuffer))]
-    VertexBuffer(NdVertexBufferData),
+    VertexBuffer(
+        #[br(args(mrc))]
+        NdVertexBufferData
+    ),
     #[br(pre_assert(nd_type == NdType::PushBuffer))]
     PushBuffer(NdPushBufferData),
     #[br(pre_assert(nd_type == NdType::BGPushBuffer))]
@@ -288,7 +291,7 @@ impl binrw::BinWrite for NdData {
     ) -> binrw::prelude::BinResult<()> {
         match self {
             NdData::Skeleton(data) => data.write_le(writer)?,
-            NdData::VertexBuffer(data) => data.write_le(writer)?,
+            NdData::VertexBuffer(data) => data.write_le_args(writer, (mwc,))?,
             NdData::PushBuffer(data) => data.write_le(writer)?,
             NdData::BGPushBuffer(data) => data.write_le(writer)?,
             NdData::Shader2(data) => data.write_le(writer)?,
@@ -373,16 +376,15 @@ impl<'a> Iterator for NdIterator<'a> {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct ModelReadContext<'a> {
-    nd_heirarchy_ptrs: Vec<u32>,
-    properties: &'a indexmap::IndexMap<String, Vec<u8>>,
-    resource: &'a [u8],
+    pub properties: &'a indexmap::IndexMap<String, Vec<u8>>,
+    pub resource: &'a [u8],
 }
 
 impl<'a> ModelReadContext<'a> {
     pub fn new(properties: &'a indexmap::IndexMap<String, Vec<u8>>, resource: &'a [u8]) -> Self {
         Self {
-            nd_heirarchy_ptrs: vec![],
             properties,
             resource,
         }

@@ -43,25 +43,10 @@ pub fn get_vertex_positions(
     })
 }
 
-/*
-let resource_views_ptr = reader.read_u32::<LittleEndian>()?;
-let num_resource_views = reader.read_u32::<LittleEndian>()?;
-
-let mut resource_views = Vec::with_capacity(num_resource_views as usize);
-
-for _ in 0..num_resource_views {
-    resource_views.push(reader.read_le()?);
-}
-
-Ok(NdData::VertexBuffer {
-    resource_views_ptr,
-    num_resource_views,
-    resource_views,
-})
-*/
-
 #[expect(clippy::manual_non_exhaustive)]
 #[binrw::binrw]
+#[br(import(mrc: super::ModelReadContext<'_> ))]
+#[bw(import(mwc: super::ModelWriteContext ))]
 #[derive(Debug, Clone)]
 #[bw(stream=w)]
 pub struct NdVertexBufferData {
@@ -71,7 +56,8 @@ pub struct NdVertexBufferData {
     #[br(temp)]
     #[bw(try_calc = resource_views.len().try_into())]
     num_resource_views: u32,
-    #[br(count = num_resource_views, seek_before = SeekFrom::Start(resource_views_ptr.into()))]
+    #[br(args {inner: mrc}, count = num_resource_views, seek_before = SeekFrom::Start(resource_views_ptr.into()))]
+    #[bw(args_raw(mwc))]
     pub resource_views: Vec<super::res_view::VertexBufferResourceView>,
     #[brw(magic = b"ndVertexBuffer\x00\x00")]
     _name: (),

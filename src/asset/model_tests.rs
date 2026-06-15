@@ -12,6 +12,7 @@ fn full_model() -> Result<(), Box<dyn std::error::Error>> {
     let out_raw = crate::RawAssetData::try_from(model)?;
 
     compare_streams(&DESCRIPTOR_BYTES, &out_raw.descriptor_bytes);
+    compare_streams(RESOURCE_BYTES, &out_raw.resource_chunks.first().unwrap());
 
     Ok(())
 }
@@ -1417,4 +1418,4 @@ static DESCRIPTOR_BYTES: [u8; 0x5758] = [
     0x09, 0x00, 0x00, 0x00, 0x00, 0x57, 0x00, 0x00,
 ];
 
-static RESOURCE_BYTES: &[u8; 423936] = include_bytes!("test_resource");
+pub(crate) static RESOURCE_BYTES: &[u8; 423936] = include_bytes!("test_resource");

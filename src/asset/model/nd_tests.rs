@@ -43,8 +43,13 @@ fn shader_param_2() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn model_subresource() -> Result<(), Box<dyn std::error::Error>> {
+    let mrc = ModelReadContext {
+        properties: &Default::default(),
+        resource: crate::asset::model::tests::RESOURCE_BYTES,
+    };
+
     let model_subresource: ModelSubresource =
-        std::io::Cursor::new(&ND_DOOR_MODEL_SUBRESOURCE_BYTES).read_le()?;
+        std::io::Cursor::new(&ND_DOOR_MODEL_SUBRESOURCE_BYTES).read_le_args(mrc)?;
 
     let mut output = vec![];
     std::io::Cursor::new(&mut output).write_le_args(&model_subresource, new_write_context())?;
@@ -68,9 +73,12 @@ fn stream_test(offset: usize, nd_bytes: &[u8]) -> Result<(), Box<dyn std::error:
 
     let x = Default::default();
 
-    let mrc = crate::asset::model::nd::ModelReadContext::new(&x, &[]);
+    let mrc = crate::asset::model::nd::ModelReadContext::new(
+        &x,
+        crate::asset::model::tests::RESOURCE_BYTES,
+    );
 
-    let nd: Nd = read_cur.read_le_args((&mrc,))?;
+    let nd: Nd = read_cur.read_le_args((mrc,))?;
 
     let mut output = vec![];
     let mut write_cur = std::io::Cursor::new(&mut output);

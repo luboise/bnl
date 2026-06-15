@@ -13,8 +13,7 @@ use crate::{
     transcode_image,
 };
 
-const TEXTURE_DESCRIPTOR_SIZE: usize = 28;
-
+// 28 bytes
 #[derive(Debug, Clone)]
 #[binrw::binrw]
 pub struct TextureDescriptor {
@@ -25,6 +24,7 @@ pub struct TextureDescriptor {
     pub flags: u32, // 0x00000001
     pub unknown_3a: u32,
     pub texture_offset: u32,
+    #[brw(align_after = 0x20)]
     pub texture_size: u32,
 }
 
@@ -74,8 +74,11 @@ pub enum TextureError {
 }
 
 #[derive(Clone)]
+#[binrw::binread]
+#[br(import(mrc: super::model::nd::ModelReadContext<'_>))]
 pub struct Texture {
     pub descriptor: TextureDescriptor,
+    #[br(count = descriptor.texture_size, map_stream = |_| std::io::Cursor::new(mrc.resource))]
     pub bytes: Vec<u8>,
 }
 

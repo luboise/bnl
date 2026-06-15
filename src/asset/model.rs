@@ -4,13 +4,14 @@ pub mod sub_colliders;
 pub mod sub_main;
 pub mod subresources;
 
+use strum::IntoEnumIterator;
 pub use subresources::ModelSubresType;
 
 use subresources::*;
 
-use std::io::{Cursor, Seek, SeekFrom};
+use std::io::{Cursor, Seek, SeekFrom, Write};
 
-use binrw::{BinRead, BinReaderExt, binrw};
+use binrw::{BinRead, BinReaderExt, BinWriterExt, binrw};
 
 use crate::asset::{
     AssetData, AssetType,
@@ -81,6 +82,12 @@ impl Model {
         &self.model_subresource
     }
 
+    pub fn num_subresources(&self) -> usize {
+        ModelSubresType::iter()
+            .filter(|v| self.has_subresource(*v))
+            .count()
+    }
+
     pub fn has_subresource(&self, subres_type: ModelSubresType) -> bool {
         match subres_type {
             ModelSubresType::Mesh => true,
@@ -91,7 +98,7 @@ impl Model {
             ModelSubresType::Matrices => self.subresource0x5.is_some(),
             ModelSubresType::Collision => self.collision_subresource.is_some(),
             ModelSubresType::Texture => self.textures_subresource.is_some(),
-            ModelSubresType::Unknown8 => self.subresource0x8.is_some(),
+            ModelSubresType::Unknown0x08 => self.subresource0x8.is_some(),
             ModelSubresType::BoneIndices => self.subresource0x9.is_some(),
             ModelSubresType::Transforms => self.transforms_subresource.is_some(),
             ModelSubresType::Unknown0x0b => self.subresource0xb.is_some(),
@@ -138,6 +145,11 @@ impl TryFrom<crate::RawAssetData> for Model {
             .filter_map(|entry| (entry.subres_type != ModelSubresType::Flags).then_some(entry.ptr))
             .collect::<Vec<_>>();
 
+        let mrc = nd::ModelReadContext {
+            properties: &Default::default(),
+            resource: resource.as_slice(),
+        };
+
         let mut it = footer_entries.into_iter();
         let Some(model_footer_entry) = it.next() else {
             return Err("no footer entries in model".into());
@@ -156,7 +168,7 @@ impl TryFrom<crate::RawAssetData> for Model {
                 .and_then(|v| footer_offsets.get(v + 1).copied())
                 .unwrap_or(footer_ptr);
 
-            let start = ptr.try_into()?;
+            let start = usize::try_from(ptr)?;
             let end = end_offset.try_into()?;
 
             let subres_bytes = descriptor_bytes
@@ -166,7 +178,8 @@ impl TryFrom<crate::RawAssetData> for Model {
             let mut cur = std::io::Cursor::new(&descriptor_bytes);
             cur.seek_relative(start.try_into()?)?;
 
-            cur.read_le_args((resource.as_slice(), 0))?
+            // TODO: pull properties in from the parent struct and use it to name the bones
+            cur.read_le_args(mrc)?
         };
 
         let mut model = Model {
@@ -232,17 +245,16 @@ impl TryFrom<crate::RawAssetData> for Model {
                     model.subresource0x5 = Some(subresource_bytes.to_owned());
                 }
                 ModelSubresType::Collision => {
-                    ()
-                    // let mut cur = Cursor::new(&descriptor_bytes);
-                    // cur.seek(SeekFrom::Start(ptr as u64))?;
-                    //
-                    // let collision_subresource = cur.read_le()?;
-                    // model.collision_subresource = Some(collision_subresource);
+                    let mut cur = Cursor::new(&descriptor_bytes);
+                    cur.seek(SeekFrom::Start(ptr as u64))?;
+
+                    let collision_subresource = cur.read_le()?;
+                    model.collision_subresource = Some(collision_subresource);
                 }
                 ModelSubresType::Texture => {
-                    let textures_subresource =
-                        TexturesSubresource::new(subresource_bytes, ptr, &resource, 0)?;
-                    model.textures_subresource = Some(textures_subresource);
+                    let mut cur = std::io::Cursor::new(&descriptor_bytes);
+                    cur.seek(SeekFrom::Start(ptr.into()))?;
+                    model.textures_subresource = Some(cur.read_le_args(mrc)?)
                 }
                 ModelSubresType::Transforms => {
                     model.transforms_subresource =
@@ -257,7 +269,7 @@ impl TryFrom<crate::RawAssetData> for Model {
                 ModelSubresType::Unknown0x02
                 | ModelSubresType::Unknown0x03
                 | ModelSubresType::Unknown0x04
-                | ModelSubresType::Unknown8
+                | ModelSubresType::Unknown0x08
                 | ModelSubresType::BoneIndices
                 | ModelSubresType::Unknown0x0b
                 | ModelSubresType::Unknown0x0d
@@ -280,7 +292,7 @@ impl TryFrom<crate::RawAssetData> for Model {
                         ModelSubresType::Unknown0x02 => &mut model.subresource0x2,
                         ModelSubresType::Unknown0x03 => &mut model.subresource0x3,
                         ModelSubresType::Unknown0x04 => &mut model.subresource0x4,
-                        ModelSubresType::Unknown8 => &mut model.subresource0x8,
+                        ModelSubresType::Unknown0x08 => &mut model.subresource0x8,
                         ModelSubresType::BoneIndices => &mut model.subresource0x9,
                         ModelSubresType::Unknown0x0b => &mut model.subresource0xb,
                         ModelSubresType::Unknown0x0d => &mut model.subresource0xd,
@@ -305,8 +317,167 @@ impl TryFrom<crate::RawAssetData> for Model {
 impl TryFrom<Model> for crate::RawAssetData {
     type Error = crate::Error;
 
-    fn try_from(_value: Model) -> Result<Self, Self::Error> {
-        todo!()
+    fn try_from(model: Model) -> Result<Self, Self::Error> {
+        let mut descriptor_bytes = vec![];
+
+        let num_subresources = model.num_subresources();
+        let mut footer_entries = vec![];
+
+        let Model {
+            flags,
+            unknown_u32_1,
+            unknown_u32_2,
+            model_subresource,
+            flags_subresource,
+            subresource0x2,
+            subresource0x3,
+            subresource0x4,
+            subresource0x5,
+            collision_subresource,
+            textures_subresource,
+            subresource0x8,
+            subresource0x9,
+            transforms_subresource,
+            subresource0xb,
+            subresource0xc,
+            subresource0xd,
+            subresource0xe,
+            subresource0xf,
+            subresource0x10,
+            subresource0x11,
+            tiles_subresource,
+            subresource0x13,
+            subresource0x14,
+            subresource0x15,
+        } = model;
+
+        let mut writer = std::io::Cursor::new(&mut descriptor_bytes);
+
+        // footer_ptr
+        writer.write_le(&0u32)?;
+        writer.write_le(&(num_subresources as u32))?;
+        writer.write_le(&flags)?;
+        writer.write_le(&unknown_u32_1)?;
+        writer.write_le(&unknown_u32_2)?;
+
+        // padding
+        writer.write_le(&0u32)?;
+        writer.write_le(&0u32)?;
+        writer.write_le(&0u32)?;
+
+        footer_entries.push((ModelSubresType::Mesh, writer.stream_position()? as u32));
+
+        let mwc = nd::new_write_context();
+        writer.write_le_args(&model_subresource, mwc.clone())?;
+
+        // Align resource to 0x100 after writing model subresource
+        {
+            let res = &mut mwc.borrow_mut().resource;
+            let modulo = res.len() % 0x100;
+            if modulo != 0 {
+                res.extend(&vec![0u8; 0x100 - modulo]);
+            }
+        }
+
+        let nd::ModelWriteContextInner {
+            nd_heirarchy_ptrs,
+            mut resource,
+            rigid_entries,
+        } = std::rc::Rc::try_unwrap(mwc)
+            .map_err(|e| "model write context still in use after finishing export")?
+            .into_inner();
+
+        if !nd_heirarchy_ptrs.is_empty() {
+            return Err("heirarchy is not empty after exiting the model".into());
+        }
+        if !rigid_entries.is_empty() {
+            return Err("rigid_entries is not empty after exiting the model, ndRigidSkinIdx indices were lost".into());
+        }
+        if let Some(flags_subresource) = flags_subresource {
+            footer_entries.push((ModelSubresType::Flags, flags_subresource));
+        }
+
+        for (subres_type, subres) in [
+            (ModelSubresType::Unknown0x02, subresource0x2),
+            (ModelSubresType::Unknown0x03, subresource0x3),
+            (ModelSubresType::Unknown0x04, subresource0x4),
+            (ModelSubresType::Matrices, subresource0x5),
+        ] {
+            let Some(subres) = subres else {
+                continue;
+            };
+
+            let pos = writer.stream_position()?;
+
+            footer_entries.push((subres_type, u32::try_from(pos)?));
+            writer.write_all(&subres)?;
+        }
+
+        if let Some(collision_subresource) = collision_subresource {
+            footer_entries.push((
+                ModelSubresType::Collision,
+                writer.stream_position()?.try_into()?,
+            ));
+
+            writer.write_le(&collision_subresource)?;
+        }
+
+        if let Some(textures_subresource) = textures_subresource {
+            let base = writer.stream_position()?.try_into()?;
+
+            footer_entries.push((ModelSubresType::Texture, base));
+
+            let (tex, res) =
+                textures_subresource.serialize(base, resource.len().try_into()?, 0x20)?;
+
+            writer.write_all(&tex)?;
+            resource.extend(res);
+        }
+
+        for (subres_type, subres) in [
+            (ModelSubresType::Unknown0x08, subresource0x8),
+            (ModelSubresType::BoneIndices, subresource0x9),
+            (ModelSubresType::Transforms, subresource0x10),
+            (ModelSubresType::Unknown0x0b, subresource0xb),
+        ] {
+            let Some(subres) = subres else {
+                continue;
+            };
+
+            let pos = writer.stream_position()?;
+
+            footer_entries.push((subres_type, u32::try_from(pos)?));
+            writer.write_all(&subres)?;
+        }
+
+        if let Some(_subresource0xc) = subresource0xc {
+            todo!("subresource 0xc export not implemented yet")
+        }
+
+        //            (ModelSubresType::Unknown0x02, subresource0xd),
+        //            (ModelSubresType::Unknown0x02, subresource0xe),
+        //            (ModelSubresType::Unknown0x02, subresource0xf),
+        //            (ModelSubresType::Unknown0x02, subresource0x10),
+        //            (ModelSubresType::Unknown0x02, subresource0x11),
+        //            (ModelSubresType::Tiles, tiles_subresource),
+        //            (ModelSubresType::Unknown0x02, subresource0x13),
+        //            (ModelSubresType::Unknown0x02, subresource0x14),
+        //            (ModelSubresType::Unknown0x02, subresource0x15),
+
+        let footer_entries_ptr = u32::try_from(writer.stream_position()?)?;
+
+        for (footer_entry_type, footer_u32) in footer_entries {
+            writer.write_le(&footer_entry_type)?;
+            writer.write_le(&footer_u32)?;
+        }
+
+        writer.rewind()?;
+        writer.write_le(&footer_entries_ptr)?;
+
+        Ok(Self {
+            descriptor_bytes,
+            resource_chunks: vec![resource],
+        })
     }
 }
 
@@ -323,277 +494,6 @@ impl Model {
             .map(|subres| &subres.textures)
     }
 }
-
-/*
-#[derive(Clone, Debug)]
-pub enum TexturedModelSubresource {
-    Flags(u32),
-    Textures(TexturesSubresource),
-    Other {
-        subresource: Vec<u8>,
-        resource: Option<Vec<u8>>,
-        original_size: usize,
-    },
-}
-
-#[derive(Clone, Debug)]
-pub struct TexturedModel {
-    pub top_flags: u32,
-
-    pub subresources: std::collections::BTreeMap<ModelSubresType, TexturedModelSubresource>,
-}
-
-impl TexturedModel {
-    pub fn new(
-        descriptor_bytes: &[u8],
-        resource_bytes: &[u8],
-    ) -> Result<Self, Box<dyn std::error::Error>> {
-        let rmd: RawModelDescriptor =
-            RawModelDescriptor::read_le(&mut Cursor::new(descriptor_bytes))?;
-
-        let offsets = rmd
-            .footer_entries
-            .iter()
-            .filter_map(|entry| (entry.subres_type != ModelSubresType::Flags).then_some(entry.ptr))
-            .collect::<Vec<_>>();
-
-        let mut model = Self {
-            top_flags: rmd.flags,
-            subresources: Default::default(),
-        };
-
-        let mut textures_start_ptr: Option<u32> = None;
-
-        for entry in &rmd.footer_entries {
-            let base = entry.ptr;
-
-            let chunk = if entry.subres_type == ModelSubresType::Flags {
-                // Base is a u32, not a ptr
-                model.subresources.insert(
-                    ModelSubresType::Flags,
-                    TexturedModelSubresource::Flags(base),
-                );
-                continue;
-            } else {
-                let end_offset = offsets
-                    .iter()
-                    .position(|v| *v == entry.ptr)
-                    .and_then(|v| offsets.get(v + 1).copied())
-                    .unwrap_or(rmd.footer_ptr);
-
-                let start = entry.ptr as usize;
-                let end = end_offset as usize;
-
-                descriptor_bytes[start..end].to_vec()
-            };
-
-            match entry.subres_type {
-                ModelSubresType::Texture => {
-                    let mut cur = Cursor::new(&chunk);
-
-                    let (num_textures, ptrs_ptr) = (
-                        cur.read_u32::<LittleEndian>()?,
-                        cur.read_u32::<LittleEndian>()? - base,
-                    );
-
-                    let mut cur = Cursor::new(&chunk[ptrs_ptr.try_into()?..]);
-                    let texture_ptrs = (0..num_textures)
-                        .map(|_| cur.read_u32::<LittleEndian>())
-                        .collect::<Result<Vec<_>, _>>()?;
-
-                    let textures = texture_ptrs
-                        .into_iter()
-                        .map(|texture_ptr| {
-                            let descriptor = std::io::Cursor::new(
-                                &chunk
-                                    .get((texture_ptr - base).try_into()?..)
-                                    .ok_or_else(|| "unable to get tex descriptor")?,
-                            )
-                            .read_le::<TextureDescriptor>()?;
-
-                            let start = descriptor.texture_offset.try_into()?;
-                            let end = start + usize::try_from(descriptor.texture_size)?;
-
-                            let resource = resource_bytes[start..end].to_vec();
-
-                            if textures_start_ptr.is_none() {
-                                textures_start_ptr = Some(start.try_into()?);
-                            }
-
-                            Ok(Texture::new(descriptor, resource))
-                        })
-                        .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
-
-                    model.subresources.insert(
-                        ModelSubresType::Texture,
-                        TexturedModelSubresource::Textures(TexturesSubresource { textures }),
-                    );
-                }
-                ModelSubresType::Flags => (),
-                ModelSubresType::Mesh
-                | ModelSubresType::Unknown0x02
-                | ModelSubresType::Matrices
-                | ModelSubresType::Collision
-                | ModelSubresType::BoneIndices
-                | ModelSubresType::Unknown0x03
-                | ModelSubresType::Unknown0x04
-                | ModelSubresType::Unknown8
-                | ModelSubresType::Transforms
-                | ModelSubresType::Unknown0x0b
-                | ModelSubresType::Unknown0x0c
-                | ModelSubresType::Unknown0x0d
-                | ModelSubresType::Unknown0x0e
-                | ModelSubresType::Unknown0x0f
-                | ModelSubresType::Unknown0x10
-                | ModelSubresType::Unknown0x11
-                | ModelSubresType::Tiles
-                | ModelSubresType::Unknown0x13
-                | ModelSubresType::Unknown0x14
-                | ModelSubresType::Unknown0x15 => {
-                    model.subresources.insert(
-                        entry.subres_type,
-                        TexturedModelSubresource::Other {
-                            original_size: chunk.len(),
-                            subresource: chunk,
-                            resource: None,
-                        },
-                    );
-                }
-            }
-        }
-
-        let TexturedModelSubresource::Other {
-            resource,
-            subresource: _,
-            original_size: _,
-        } = model
-            .subresources
-            .get_mut(&ModelSubresType::Mesh)
-            .ok_or_else(|| "texture subres but no model subres".to_owned())?
-        else {
-            return Err("No model subres in model".into());
-        };
-
-        if let Some(textures_start_ptr) = textures_start_ptr {
-            *resource = Some(resource_bytes[..textures_start_ptr.try_into()?].to_vec());
-        } else {
-            *resource = Some(resource_bytes.to_vec());
-        }
-
-        Ok(model)
-    }
-
-    pub fn serialize(&self) -> Result<(Vec<u8>, Vec<u8>), Box<dyn std::error::Error>> {
-        const ALIGNMENT: usize = 0x20;
-
-        let mut model_bytes = vec![0u8; ALIGNMENT];
-        let mut resource_bytes = vec![0u8; 0];
-
-        let mut footer = vec![];
-
-        let num_subresources: u32 = self.subresources.len().try_into()?;
-
-        model_bytes[4..8].copy_from_slice(&num_subresources.to_le_bytes());
-        model_bytes[8..12].copy_from_slice(&self.top_flags.to_le_bytes());
-
-        // Pack the subresources back into the model (tracking offset as we go)
-
-        for (subres_type, subres) in self.subresources.clone() {
-            match subres_type {
-                ModelSubresType::Flags => {
-                    let TexturedModelSubresource::Flags(flags) = subres else {
-                        return Err("subres type mismatch".into());
-                    };
-
-                    footer.push((ModelSubresType::Flags, flags));
-                }
-                ModelSubresType::Texture => {
-                    let TexturedModelSubresource::Textures(textures_subres) = subres else {
-                        return Err("subres type mismatch".into());
-                    };
-
-                    if !textures_subres.textures.is_empty() {
-                        footer.push((ModelSubresType::Texture, u32::try_from(model_bytes.len())?));
-                        let (mut subresource, mut resource) = textures_subres.serialize(
-                            model_bytes.len().try_into()?,
-                            resource_bytes.len().try_into()?,
-                            ALIGNMENT,
-                        )?;
-
-                        if subresource.len() < textures_subres.original_size {
-                            eprintln!(
-                                "warning: subresource of size 0x{subres_len:x} is shorter than original size 0x{original_size:x}",
-                                subres_len = subresource.len(),
-                                original_size = textures_subres.original_size
-                            );
-                            subresource.resize(textures_subres.original_size, 0u8);
-                        }
-
-                        model_bytes.append(&mut subresource);
-                        resource_bytes.append(&mut resource);
-                    }
-                }
-                ModelSubresType::Mesh
-                | ModelSubresType::Unknown0x02
-                | ModelSubresType::Unknown0x03
-                | ModelSubresType::Unknown0x04
-                | ModelSubresType::Matrices
-                | ModelSubresType::Collision
-                | ModelSubresType::Unknown8
-                | ModelSubresType::BoneIndices
-                | ModelSubresType::Transforms
-                | ModelSubresType::Unknown0x0b
-                | ModelSubresType::Unknown0x0c
-                | ModelSubresType::Unknown0x0d
-                | ModelSubresType::Unknown0x0e
-                | ModelSubresType::Unknown0x0f
-                | ModelSubresType::Unknown0x10
-                | ModelSubresType::Unknown0x11
-                | ModelSubresType::Tiles
-                | ModelSubresType::Unknown0x13
-                | ModelSubresType::Unknown0x14
-                | ModelSubresType::Unknown0x15 => {
-                    let TexturedModelSubresource::Other {
-                        mut subresource,
-                        resource,
-                        original_size,
-                    } = subres
-                    else {
-                        return Err("subres type mismatch".into());
-                    };
-
-                    if !subresource.is_empty() {
-                        footer.push((subres_type, u32::try_from(model_bytes.len())?));
-                    }
-
-                    if subresource.len() < original_size {
-                        eprintln!(
-                            "warning: subresource of size 0x{subres_len:x} is shorter than original size 0x{original_size:x}",
-                            subres_len = subresource.len()
-                        );
-                        subresource.resize(original_size, 0u8);
-                    }
-
-                    model_bytes.append(&mut subresource);
-                    if let Some(mut resource) = resource {
-                        resource_bytes.append(&mut resource);
-                    }
-                }
-            }
-        }
-
-        let base_len = u32::try_from(model_bytes.len())?;
-        model_bytes[0..4].copy_from_slice(&base_len.to_le_bytes());
-
-        for (subres_type, ptr) in footer {
-            model_bytes.extend_from_slice(&u32::from(subres_type).to_le_bytes());
-            model_bytes.extend_from_slice(&ptr.to_le_bytes());
-        }
-
-        Ok((model_bytes, resource_bytes))
-    }
-}
-*/
 
 #[cfg(test)]
 #[path = "./model_tests.rs"]
