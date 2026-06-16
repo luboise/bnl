@@ -162,9 +162,8 @@ impl binrw::BinWrite for ModelSubresource {
             // nodes ptr
             cur.write_le(&0x30u32)?;
             cur.write_le(&(self.nodes.len() as u32))?;
-            // properties
-            // TODO: CALCULATE THIS
-            cur.write_le(&0x4ab6u32)?;
+            // properties_ptr
+            cur.write_le(&0u32)?;
             // map2
             cur.write_le(&0u32)?;
 
@@ -201,7 +200,18 @@ impl binrw::BinWrite for ModelSubresource {
                 cur.write_all(&indices)?;
             }
 
-            cur.write_le(&ModelKeyValues::from(properties.clone()))?;
+            if !properties.is_empty() {
+                let properties_pos = cur.stream_position()?;
+                cur.write_le(&ModelKeyValues::from(properties.clone()))?;
+
+                let restore = cur.stream_position()?;
+
+                // update the properties pos
+                cur.seek(SeekFrom::Start(0x10))?;
+                cur.write_le(&(properties_pos as u32))?;
+
+                cur.seek(SeekFrom::Start(restore))?;
+            }
 
             subres
         };

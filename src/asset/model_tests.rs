@@ -17,6 +17,50 @@ fn full_model() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[test]
+fn full_model_2() -> Result<(), Box<dyn std::error::Error>> {
+    let mut model = Model::try_from(crate::RawAssetData {
+        descriptor_bytes: DESCRIPTOR_BYTES.to_vec(),
+        resource_chunks: vec![RESOURCE_BYTES.to_vec()],
+    })?;
+
+    {
+        let push_buffer = model
+            .model_subresource
+            .nodes
+            .first_mut()
+            .unwrap()
+            .heirarchy_mut()
+            .find_map(|v| {
+                let nd::NdData::PushBuffer(data) = v.data.as_mut() else {
+                    return None;
+                };
+
+                (data.draw_calls.len() > 1).then_some(data)
+            })
+            .unwrap();
+
+        // remove one draw call (should offset the rest of the file)
+        push_buffer.draw_calls.pop();
+    }
+
+    let out_1 = crate::RawAssetData::try_from(model)?;
+    std::fs::write("testoutput", &out_1.descriptor_bytes)?;
+    std::fs::write("modelsubres", &out_1.descriptor_bytes[0x40..])?;
+    std::fs::write("testresource", out_1.resource_chunks.first().unwrap())?;
+
+    let model_2 = Model::try_from(out_1.clone())?;
+    let out_2 = crate::RawAssetData::try_from(model_2)?;
+
+    compare_streams(&out_1.descriptor_bytes, &out_2.descriptor_bytes);
+    compare_streams(
+        out_1.resource_chunks.first().unwrap(),
+        out_2.resource_chunks.first().unwrap(),
+    );
+
+    Ok(())
+}
+
 static DESCRIPTOR_BYTES: [u8; 0x5758] = [
     0x20, 0x57, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00, 0x49, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,

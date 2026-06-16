@@ -217,6 +217,10 @@ impl Nd {
     pub fn heirarchy(&self) -> impl Iterator<Item = &Nd> {
         NdIterator::new(self)
     }
+
+    pub fn heirarchy_mut(&mut self) -> impl Iterator<Item = &mut Nd> {
+        NdIteratorMut::new(self)
+    }
 }
 
 #[binrw::binrw]
@@ -344,27 +348,32 @@ struct NdIterator<'a> {
     stack: VecDeque<&'a Nd>,
 }
 
-fn add_to_stack<'a>(node: &'a Nd, stack: &mut VecDeque<&'a Nd>) {
-    stack.push_back(node);
-
-    if let Some(child) = &node.first_child {
-        add_to_stack(child, stack);
-    }
-
-    if let Some(sibling) = &node.next_sibling {
-        add_to_stack(sibling, stack);
-    }
+struct NdIteratorMut<'a> {
+    stack: VecDeque<*mut Nd>,
+    // needed to tie lifetime of ref to iterator
+    _marker: std::marker::PhantomData<&'a mut Nd>
 }
 
 impl<'a> NdIterator<'a> {
     pub fn new(nd: &'a Nd) -> Self {
         let stack = {
             let mut stack = VecDeque::new();
-            add_to_stack(nd, &mut stack);
+            Self::add_to_stack(nd, &mut stack);
             stack
         };
-
         Self { stack }
+    }
+
+    fn add_to_stack(node: &'a Nd, stack: &mut VecDeque<&'a Nd>) {
+        stack.push_back(node);
+
+        if let Some(child) = &node.first_child {
+            Self::add_to_stack(child, stack);
+        }
+
+        if let Some(sibling) = &node.next_sibling {
+            Self::add_to_stack(sibling, stack);
+        }
     }
 }
 
@@ -373,6 +382,40 @@ impl<'a> Iterator for NdIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.stack.pop_front()
+    }
+}
+
+
+impl<'a> NdIteratorMut<'a> {
+    pub fn new(nd: &'a mut Nd) -> Self {
+        let stack = {
+            let mut stack = VecDeque::new();
+            Self::add_to_stack(nd, &mut stack);
+            stack
+        };
+        Self { stack, _marker: Default::default() }
+    }
+
+    fn add_to_stack(node: &'a mut Nd, stack: &mut VecDeque<*mut Nd>) {
+        stack.push_back(node as *mut Nd);
+
+        if let Some(child) = &mut node.first_child {
+            Self::add_to_stack(child, stack);
+        }
+
+        if let Some(sibling) = &mut node.next_sibling {
+            Self::add_to_stack(sibling, stack);
+        }
+    }
+}
+
+
+
+impl<'a> Iterator for NdIteratorMut<'a> {
+    type Item = &'a mut Nd;
+
+    fn next(&mut self) -> Option<Self::Item> {
+         self.stack.pop_front().map(|v| unsafe { &mut *v })
     }
 }
 

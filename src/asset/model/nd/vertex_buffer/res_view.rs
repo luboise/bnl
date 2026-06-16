@@ -4,18 +4,18 @@ use binrw::{BinReaderExt, BinWriterExt};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VertexBufferResourceView {
-    stride: u8,
-    view_type: VertexBufferViewType,
-    unknown_u16: u16,
+    pub stride: u8,
+    pub view_type: VertexBufferViewType,
+    pub unknown_u16: u16,
 
-    unknown_u32_1: u32,
+    pub unknown_u32_1: u32,
 
     // 0x8
-    unknown_u32_2: u32,
-    unknown_u32_3: u32,
+    pub unknown_u32_2: u32,
+    pub unknown_u32_3: u32,
 
     resource_start: u32,
-    resource: Vec<u8>,
+    pub resource: Vec<u8>,
 }
 
 impl binrw::BinRead for VertexBufferResourceView {
