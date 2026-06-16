@@ -1,3 +1,5 @@
+use std::fmt::Write;
+
 use crate::utils::compare_streams;
 
 use super::*;
@@ -24,6 +26,14 @@ fn full_model_2() -> Result<(), Box<dyn std::error::Error>> {
         resource_chunks: vec![RESOURCE_BYTES.to_vec()],
     })?;
 
+    {
+        let shader_params = model
+            .model_subresource
+            .nodes
+            .iter()
+            .flat_map(|node| node.heirarchy())
+            .filter(|node| matches!(node.data.as_ref(), nd::NdData::ShaderParam2(_)));
+    }
     {
         let push_buffer = model
             .model_subresource

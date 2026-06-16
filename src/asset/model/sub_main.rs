@@ -199,6 +199,8 @@ impl binrw::BinWrite for ModelSubresource {
                 cur.write_all(&indices)?;
             }
 
+            let properties = &mwc.borrow().properties;
+
             if !properties.is_empty() {
                 let properties_pos = cur.stream_position()?;
                 cur.write_le(&ModelKeyValues::from(properties.clone()))?;

@@ -368,6 +368,9 @@ impl TryFrom<Model> for crate::RawAssetData {
         footer_entries.push((ModelSubresType::Mesh, writer.stream_position()? as u32));
 
         let mwc = nd::new_write_context();
+
+        mwc.borrow_mut().properties = model_subresource.properties.clone();
+
         writer.write_le_args(&model_subresource, mwc.clone())?;
 
         // Align resource to 0x100 after writing model subresource
@@ -383,6 +386,7 @@ impl TryFrom<Model> for crate::RawAssetData {
             nd_heirarchy_ptrs,
             mut resource,
             rigid_entries,
+            properties: _,
         } = std::rc::Rc::try_unwrap(mwc)
             .map_err(|e| "model write context still in use after finishing export")?
             .into_inner();

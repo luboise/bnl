@@ -48,10 +48,25 @@ impl Serialize for Nd {
 pub struct Nd {
     #[br(temp, try_calc = {r.stream_position()?.try_into().map_err(br_error(r))})]
     _base: u32,
-    #[br(temp, assert(name_ptr != 0))]
-    name_ptr: u32,
-    #[br(restore_position, seek_before = SeekFrom::Start(name_ptr.into()))]
-    pub name: binrw::NullString,
+    #[br(calc = mrc.properties.iter()
+            .find_map(|(key, value)| {
+                if value.len() != 4 {
+                    return None;
+                } 
+
+                let value = u32::from_le_bytes(value.as_slice().try_into().unwrap());
+                if value != _base {
+                    return None;
+                }
+
+                Some(key.clone())
+    }))]
+    #[bw(ignore)]
+    pub name: Option<String>,
+    #[br(temp, assert(nd_type_str_ptr != 0))]
+    nd_type_str_ptr: u32,
+    #[br(restore_position, seek_before = SeekFrom::Start(nd_type_str_ptr.into()))]
+    pub nd_type_str: binrw::NullString,
     pub nd_type: NdType,
     pub unknown_u16: u16, // Possibly index
     pub unknown_ptr1: u32,
@@ -109,7 +124,8 @@ pub fn new_write_context() -> ModelWriteContext {
     ModelWriteContext::new(ModelWriteContextInner {
         nd_heirarchy_ptrs: vec![],
         resource: vec![],
-        rigid_entries: vec![]
+        rigid_entries: vec![],
+        properties: Default::default()
     }.into())
 }
 
@@ -117,7 +133,8 @@ pub fn new_write_context() -> ModelWriteContext {
 pub struct ModelWriteContextInner {
     pub nd_heirarchy_ptrs: Vec<u32>,
     pub resource: Vec<u8>,
-    pub rigid_entries: Vec<(u64, Vec<u8>)>
+    pub rigid_entries: Vec<(u64, Vec<u8>)>,
+    pub properties: indexmap::IndexMap<String, Vec<u8>>
 }
 
 impl binrw::BinWrite for Nd {
@@ -132,7 +149,8 @@ impl binrw::BinWrite for Nd {
         let base = writer.stream_position()?;
 
         let Nd {
-            name: _,
+            name,
+            nd_type_str: _,
             nd_type,
             unknown_u16,
             unknown_ptr1,
@@ -142,6 +160,17 @@ impl binrw::BinWrite for Nd {
             first_child,
             next_sibling,
         } = &self;
+
+
+        // if has name, update the property to current offset
+        if let Some(name) = name {
+            let bytes_to_write = u32::try_from(writer.stream_position()?).unwrap().to_le_bytes().to_vec();
+
+            let mut borrowed = mwc.borrow_mut();
+
+            let entry = borrowed.properties.entry(name.clone()).or_insert(bytes_to_write.clone());
+            *entry = bytes_to_write;
+        }
 
         let name_ptr =
             base + 0x20 + u64::try_from(data.name_offset()).map_err(br_error(writer))?;

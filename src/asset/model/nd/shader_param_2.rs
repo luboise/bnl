@@ -1,6 +1,6 @@
 use std::io::SeekFrom;
 
-use binrw::{BinReaderExt, BinWrite, BinWriterExt};
+use binrw::{BinReaderExt, BinWriterExt};
 use serde::ser::SerializeMap;
 
 use crate::asset::model::nd::{br_error, br_get_stream_pos};
@@ -16,10 +16,10 @@ pub struct NdShaderParam2Data {
     #[br(temp, assert(payload_ptr == r.stream_position().unwrap() as u32))]
     #[bw(calc = 0)]
     payload_ptr_2: u32,
-    main_payload: PixelShaderParams,
+    pub main_payload: PixelShaderParams,
     #[br(if(payload_ptr_2 != 0),
         seek_before = SeekFrom::Start(payload_ptr_2.into()))]
-    sub_payload: Option<PixelShaderParams>,
+    pub sub_payload: Option<PixelShaderParams>,
     #[brw(magic = b"ndShaderParam2\x00\x00")]
     _name: (),
 }
@@ -260,11 +260,7 @@ impl PixelShaderParams {
         v as i64 + param_assignments_size
     }
 
-    pub fn attribute_map(&self) -> &indexmap::IndexMap<String, AttributeValue> {
-        todo!()
-        // &self.attribute_map
-    }
-
+    #[deprecated(note = "Access the field instead, PixelShaderParams.texture_assignments")]
     pub fn texture_assignments(&self) -> &[TextureAssignment] {
         &self.texture_assignments
     }
