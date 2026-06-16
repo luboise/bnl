@@ -581,13 +581,6 @@ fn parse_rigid_indices() -> binrw::BinResult<Vec<u8>> {
     Ok(indices)
 }
 
-#[binrw::writer(writer)]
-fn write_rigid_indices(data: &Vec<u8>) -> binrw::BinResult<()> {
-    writer.write_le(&0u32);
-    Ok(())
-}
-
-
 #[derive(Clone, Debug)]
 #[binrw::binread]
 #[expect(clippy::manual_non_exhaustive)]

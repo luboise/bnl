@@ -66,21 +66,6 @@ impl binrw::BinRead for ModelSubresource {
         let primitive_ptrs_start = reader.read_u32::<LittleEndian>()?;
         let primitive_count = reader.read_u32::<LittleEndian>()?;
         let properties_ptr = reader.read_u32::<LittleEndian>()?;
-
-        let map2_ptr = reader.read_u32::<LittleEndian>()?;
-        if map2_ptr != 0 {
-            return Err(binrw::Error::AssertFail {
-                pos: reader.stream_position().unwrap_or(0),
-                message: "map2_ptr is not 0".to_owned(),
-            });
-        }
-
-        let floats = reader.read_le()?;
-        let next_ptr = reader.read_le()?;
-        let model_model_root = reader.read_le()?;
-
-        let stream_end_position = reader.stream_position()?;
-
         let properties = {
             if properties_ptr == 0 {
                 Default::default()
@@ -98,6 +83,20 @@ impl binrw::BinRead for ModelSubresource {
                     })?
             }
         };
+
+        let map2_ptr = reader.read_u32::<LittleEndian>()?;
+        if map2_ptr != 0 {
+            return Err(binrw::Error::AssertFail {
+                pos: reader.stream_position().unwrap_or(0),
+                message: "map2_ptr is not 0".to_owned(),
+            });
+        }
+
+        let floats = reader.read_le()?;
+        let next_ptr = reader.read_le()?;
+        let model_model_root = reader.read_le()?;
+
+        let stream_end_position = reader.stream_position()?;
 
         let primitive_ptrs: Vec<u32> = {
             let mut reader = reader.clone();
