@@ -126,7 +126,11 @@ impl VertexBufferResourceView {
         &self,
         gltf: &mut gltf_writer::gltf::Gltf,
         buffer_view_index: gltf_writer::GltfIndex,
-    ) -> Result<gltf_writer::GltfIndex, std::io::Error> {
+    ) -> Result<gltf_writer::GltfIndex, crate::Error> {
+        if self.resource.is_empty() {
+            return Err("empty resource".into());
+        }
+
         match self.view_type {
             VertexBufferViewType::Vertex => {
                 let num_vertices = self.resource.len() / 12;
@@ -136,7 +140,7 @@ impl VertexBufferResourceView {
                     // self.view_start as usize,
                     0,
                     gltf_writer::gltf::AccessorDataType::F32,
-                    num_vertices as usize,
+                    num_vertices,
                     gltf_writer::gltf::AccessorComponentCount::VEC3,
                 )))
             }
@@ -148,7 +152,7 @@ impl VertexBufferResourceView {
                     // self.view_start as usize,
                     0,
                     gltf_writer::gltf::AccessorDataType::F32,
-                    num_vertices as usize,
+                    num_vertices,
                     gltf_writer::gltf::AccessorComponentCount::VEC2,
                 )))
             }
@@ -160,10 +164,9 @@ impl VertexBufferResourceView {
             | VertexBufferViewType::Unknown15
             | VertexBufferViewType::Unknown16
             | VertexBufferViewType::Skin
-            | VertexBufferViewType::KnknownFF => Err(std::io::Error::other(format!(
-                "VertexBufferViewType {:?} not implemented.",
-                self.view_type
-            ))),
+            | VertexBufferViewType::KnknownFF => {
+                Err(format!("VertexBufferViewType {:?} not implemented.", self.view_type).into())
+            }
         }
     }
 

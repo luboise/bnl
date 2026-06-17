@@ -18,9 +18,9 @@ use std::{
 
 use serde::{Serialize, ser::SerializeMap};
 
-use crate::asset::model::nd::shader_param_2::NdShaderParam2Data;
+pub use crate::asset::model::nd::shader_param_2::NdShaderParam2Data;
 
-use {
+pub use {
     push_buffer::NdBGPushBufferData,
     shader::{NdShader2Data, NdVertexShaderData},
 };
@@ -519,7 +519,7 @@ pub struct NdSkeletonData {
     #[brw(magic = b"ndSkeleton\x00\x00")]
     _name: (),
     #[br(count = num_bones)]
-    bones: Vec<Bone>,
+    pub bones: Vec<Bone>,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -30,6 +30,59 @@ impl NdShaderParam2Data {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MaybeIndex(pub Option<u32>);
+
+impl serde::Serialize for MaybeIndex {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer {
+        serializer.serialize_u32((*self).into())
+    }
+}
+
+impl From<u32> for MaybeIndex {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => Self(None),
+            x => Self(Some(x - 1))
+        }
+    }
+}
+
+impl From<MaybeIndex> for u32 {
+    fn from(value: MaybeIndex) -> Self {
+        match value.0 {
+            Some(x) => x + 1,
+            None => 0
+        }
+    }
+}
+
+impl binrw::BinRead for MaybeIndex {
+    type Args<'a> = ();
+    fn read_options<R: std::io::prelude::Read + std::io::prelude::Seek>(
+        reader: &mut R,
+        _: binrw::Endian,
+        _: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<Self> {
+        Ok(reader.read_le::<u32>()?.into())
+    }
+}
+
+impl binrw::BinWrite for MaybeIndex {
+    type Args<'a> = ();
+    fn write_options<W: std::io::prelude::Write + std::io::prelude::Seek>(
+        &self,
+        writer: &mut W,
+        _: binrw::Endian,
+        _: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        writer.write_le(&u32::from(*self))?;
+        Ok(())
+    }
+}
+
 #[binrw::binread]
 #[derive(Debug, Clone)]
 #[br(import(num_assignments: u32))]
@@ -42,7 +95,8 @@ pub struct ParamAssignment {
 
     // 0x4
     pub idk1: u32,
-    pub texture_index: u32,
+
+    pub texture_assignment_index: MaybeIndex,
     #[br(assert(colour == 0xffffffff))]
     pub colour: u32,
 }
@@ -127,7 +181,7 @@ impl binrw::BinWrite for ParamAssignments {
         let mut name_buf = vec![];
 
         for param_assignment in param_assignments {
-            let ParamAssignment { name, idk1, texture_index, colour } = param_assignment;
+            let ParamAssignment { name, idk1, texture_assignment_index, colour } = param_assignment;
             writer.write_le(&name_ptr)?;
             let mut name_bytes = name.0.clone();
             // null char
@@ -139,7 +193,7 @@ impl binrw::BinWrite for ParamAssignments {
             name_buf.extend(name_bytes);
 
             idk1.write_le(writer)?;
-            texture_index.write_le(writer)?;
+            texture_assignment_index.write_le(writer)?;
             colour.write_le(writer)?;
         }
 
@@ -296,7 +350,7 @@ where
 #[binrw::binrw]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TextureAssignment {
-    pub(crate) texture_index: u32,
+    pub(crate) texture_index: MaybeIndex,
     pub(crate) count_1: u8,
     pub(crate) count_2: u8,
     pub(crate) count_3: u8,

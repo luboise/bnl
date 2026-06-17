@@ -14,7 +14,7 @@ fn full_model() -> Result<(), Box<dyn std::error::Error>> {
     let out_raw = crate::RawAssetData::try_from(model)?;
 
     compare_streams(&DESCRIPTOR_BYTES, &out_raw.descriptor_bytes);
-    compare_streams(RESOURCE_BYTES, &out_raw.resource_chunks.first().unwrap());
+    compare_streams(RESOURCE_BYTES, out_raw.resource_chunks.first().unwrap());
 
     Ok(())
 }
@@ -25,6 +25,17 @@ fn full_model_2() -> Result<(), Box<dyn std::error::Error>> {
         descriptor_bytes: DESCRIPTOR_BYTES.to_vec(),
         resource_chunks: vec![RESOURCE_BYTES.to_vec()],
     })?;
+
+    let mut gltf = gltf_writer::Gltf::try_from(model.clone())?;
+    gltf.prepare_for_export().map_err(|e| format!("{e:?}"))?;
+
+    let _ = std::fs::remove_file("./out/HELLO.gltf");
+
+    gltf.export(
+        &std::path::PathBuf::from("./out/HELLO.gltf"),
+        gltf_writer::serialisation::GltfExportType::JSON,
+    )
+    .map_err(|e| format!("{e:?}"))?;
 
     {
         let shader_params = model

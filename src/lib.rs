@@ -1,6 +1,7 @@
 pub mod d3d;
 pub use d3d::{D3DFormat, D3DPrimitiveType};
 
+pub mod gltf;
 pub(crate) mod images;
 pub use images::transcode as transcode_image;
 
