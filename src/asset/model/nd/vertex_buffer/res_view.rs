@@ -14,7 +14,7 @@ pub struct VertexBufferResourceView {
     pub unknown_u32_2: u32,
     pub unknown_u32_3: u32,
 
-    resource_start: u32,
+    pub resource_start: u32,
     pub resource: Vec<u8>,
 }
 

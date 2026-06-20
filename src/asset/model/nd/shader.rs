@@ -2,7 +2,7 @@ use std::io::SeekFrom;
 
 #[binrw::binrw]
 #[derive(Debug, Clone)]
-struct VertexShader {
+pub struct VertexShader {
     idk1: u16,
     num_dwords: u16,
 
@@ -20,7 +20,7 @@ impl VertexShader {
 #[br(little)]
 #[bw(little)]
 #[derive(Debug, Clone)]
-struct OtherStream {
+pub struct OtherStream {
     #[br(
         assert(!stream.is_empty() && *stream.last().unwrap() == 0xffffffff),
         parse_with = binrw::helpers::until(|byte| *byte == 0xffffffff),
@@ -37,6 +37,7 @@ impl OtherStream {
 #[binrw::binrw]
 #[bw(stream = w)]
 #[derive(Debug, Clone)]
+#[expect(clippy::manual_non_exhaustive)]
 pub struct NdVertexShaderData {
     #[br(temp)]
     #[bw(try_calc = u32::try_from(w.stream_position()?
@@ -46,19 +47,19 @@ pub struct NdVertexShaderData {
     #[br(temp)]
     #[bw(try_calc = u32::try_from(stream_source_indices.len()))]
     num_stream_sources: u32,
-    constant1: u32,
-    constant2: u16,
-    idk1: u16,
+    pub constant1: u32,
+    pub constant2: u16,
+   pub idk1: u16,
     // 0x10
-    idk2: u32,
-    idk3: u32,
-    idk4: u32,
-    count1: u32,
+   pub idk2: u32,
+ pub   idk3: u32,
+ pub   idk4: u32,
+ pub   count1: u32,
     // 0x20
-    count2: u32,
-    count3: u32,
-    idk_2_1: u32,
-    idk_2_2: u32,
+ pub   count2: u32,
+ pub   count3: u32,
+ pub   idk_2_1: u32,
+ pub   idk_2_2: u32,
     // 0x30
     #[br(temp)]
     #[bw(try_calc = u32::try_from(w.stream_position()?
@@ -82,15 +83,15 @@ pub struct NdVertexShaderData {
     #[brw(magic = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00ndVertexShader\x00\x00")]
     _name: (),
     #[br(seek_before = SeekFrom::Start(other_stream_ptr.into()))]
-    other_stream: OtherStream,
+ pub   other_stream: OtherStream,
     #[br(seek_before=SeekFrom::Start(vertex_shader_ptr.into()))]
-    vertex_shader: VertexShader,
+ pub   vertex_shader: VertexShader,
     #[br(count = num_stream_sources,
         seek_before = SeekFrom::Start(stream_source_indices_ptr.into()))]
-    stream_source_indices: Vec<u32>,
+ pub   stream_source_indices: Vec<u32>,
     #[br(count = num_stream_sources,
         seek_before = SeekFrom::Start(strides_ptr.into()))]
-    strides: Vec<u8>,
+ pub   strides: Vec<u8>,
 }
 
 #[binrw::binrw]
