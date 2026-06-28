@@ -77,6 +77,8 @@ impl binrw::BinWrite for VertexBufferResourceView {
             resource,
         } = self;
 
+        let mut resource_start = *resource_start;
+
         writer.write_le(stride)?;
         writer.write_le(view_type)?;
         writer.write_le(unknown_u16)?;
@@ -93,7 +95,10 @@ impl binrw::BinWrite for VertexBufferResourceView {
 
             res.seek(SeekFrom::Start(cur_start))?;
 
-            if u64::from(*resource_start) != res.stream_position()? {
+            if u64::from(resource_start) != res.stream_position()? {
+                // TODO: Print warning here
+                resource_start = res.stream_position()? as u32;
+                /*
                 return Err(binrw::Error::AssertFail {
                     pos: res.stream_position().unwrap_or(0),
                     message: format!(
@@ -102,12 +107,13 @@ impl binrw::BinWrite for VertexBufferResourceView {
                         res.stream_position()?,
                     ),
                 });
+                */
             }
 
             res.write_le(resource)?;
         }
 
-        writer.write_le(resource_start)?;
+        writer.write_le(&resource_start)?;
         writer.write_le(&(resource.len() as u32))?;
 
         Ok(())
@@ -132,7 +138,7 @@ impl VertexBufferResourceView {
         }
 
         match self.view_type {
-            VertexBufferViewType::Vertex => {
+            VertexBufferViewType::Position => {
                 let num_vertices = self.resource.len() / 12;
 
                 Ok(gltf.add_accessor(gltf_writer::gltf::Accessor::new(
@@ -156,8 +162,8 @@ impl VertexBufferResourceView {
                     gltf_writer::gltf::AccessorComponentCount::VEC2,
                 )))
             }
-            VertexBufferViewType::Unknown10
-            | VertexBufferViewType::Unknown11
+            VertexBufferViewType::Normal
+            | VertexBufferViewType::Colour
             | VertexBufferViewType::Unknown12
             | VertexBufferViewType::SkinWeight
             | VertexBufferViewType::Unknown14
@@ -217,9 +223,9 @@ impl VertexBufferResourceView {
 pub enum VertexBufferViewType {
     Skin = 0x0,
     SkinWeight = 0x8,
-    Vertex = 0x9,
-    Unknown10 = 0xa,
-    Unknown11 = 0xb,
+    Position = 0x9,
+    Normal = 0xa,
+    Colour = 0xb,
     Unknown12 = 0xc,
     UV = 0xd,
     Unknown14 = 0xe,
@@ -244,9 +250,11 @@ macro_rules! impl_vertex_buffer_view_marker {
     };
 }
 
-impl_vertex_buffer_view_marker!(Vertex, Vec<[f32; 3]>);
 impl_vertex_buffer_view_marker!(Skin, Vec<[f32; 2]>);
 impl_vertex_buffer_view_marker!(SkinWeight, Vec<[f32; 2]>);
+impl_vertex_buffer_view_marker!(Position, Vec<[f32; 3]>);
+impl_vertex_buffer_view_marker!(Normal, Vec<[f32; 3]>);
+impl_vertex_buffer_view_marker!(Colour, Vec<f32>);
 
 /*
 pub struct VertexView;

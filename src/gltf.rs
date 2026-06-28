@@ -397,18 +397,18 @@ impl NdGltfAdd for crate::asset::model::nd::NdPushBufferData {
                     ctx.gltf.add_node(new_node)
                 };
 
-                ctx.gltf
-                    .nodes_mut()
-                    .get_mut(new_node_index as usize)
-                    .unwrap()
-                    .set_mesh_index(Some(new_mesh_index));
-
-                if let Some(skin_index) = ctx.current_skin {
-                    ctx.gltf
+                {
+                    let node = ctx
+                        .gltf
                         .nodes_mut()
                         .get_mut(new_node_index as usize)
-                        .unwrap()
-                        .set_skin_index(Some(skin_index));
+                        .unwrap();
+
+                    node.set_mesh_index(Some(new_mesh_index));
+
+                    if let Some(skin_index) = ctx.current_skin.as_ref() {
+                        node.set_skin_index(Some(*skin_index));
+                    }
                 }
 
                 if let Some(node) = ctx.current_node() {
@@ -560,7 +560,7 @@ impl NdGltfAdd for crate::asset::model::nd::NdVertexBufferData {
                 Some(34962),
             ));
 
-            if res_view.view_type() == VertexBufferViewType::Vertex
+            if res_view.view_type() == VertexBufferViewType::Position
                 && ctx.positions_accessor.is_none()
             {
                 let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(

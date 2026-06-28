@@ -28,7 +28,7 @@ pub fn get_vertex_positions(
     views: &[VertexBufferResourceView],
 ) -> Option<Vec<[f32; 3]>> {
     views.iter().find_map(|view| {
-        (view.view_type() == res_view::VertexBufferViewType::Vertex).then(|| {
+        (view.view_type() == res_view::VertexBufferViewType::Position).then(|| {
             resource[view.start() as usize..view.end() as usize]
                 .chunks_exact(12)
                 .map(|chunk| {

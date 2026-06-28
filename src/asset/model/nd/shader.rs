@@ -1,7 +1,7 @@
 use std::io::SeekFrom;
 
 #[binrw::binrw]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VertexShader {
     idk1: u16,
     num_dwords: u16,
@@ -16,10 +16,24 @@ impl VertexShader {
     }
 }
 
+impl std::fmt::Debug for VertexShader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { idk1, num_dwords, data } = self;
+
+        f
+            .debug_struct("VertexShader")
+            .field("idk1", idk1)
+            .field("num_dwords", num_dwords)
+            .field("data len", &data.len())
+            .finish()
+    }
+}
+
+
 #[binrw::binrw]
 #[br(little)]
 #[bw(little)]
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OtherStream {
     #[br(
         assert(!stream.is_empty() && *stream.last().unwrap() == 0xffffffff),
@@ -33,6 +47,17 @@ impl OtherStream {
         self.stream.len() * 4
     }
 }
+
+impl std::fmt::Debug for OtherStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { stream } = self;
+
+        f.debug_struct("OtherStream")
+            .field("stream length", &stream.len())
+            .finish()
+    }
+}
+
 
 #[binrw::binrw]
 #[bw(stream = w)]
