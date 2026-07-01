@@ -522,6 +522,7 @@ pub struct NdSkeletonData {
     pub bones: Vec<Bone>,
 }
 
+// TODO: Bone Names in import
 #[derive(Debug, Clone, Serialize)]
 #[binrw::binrw]
 #[expect(clippy::manual_non_exhaustive)]

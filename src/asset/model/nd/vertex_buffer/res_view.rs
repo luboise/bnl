@@ -4,7 +4,6 @@ use binrw::{BinReaderExt, BinWriterExt};
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct VertexBufferResourceView {
-    pub stride: u8,
     pub view_type: VertexBufferViewType,
     pub unknown_u16: u16,
 
@@ -15,7 +14,7 @@ pub struct VertexBufferResourceView {
     pub unknown_u32_3: u32,
 
     pub resource_start: u32,
-    pub resource: Vec<u8>,
+    pub resource: Vec<f32>,
 }
 
 impl binrw::BinRead for VertexBufferResourceView {
@@ -26,8 +25,19 @@ impl binrw::BinRead for VertexBufferResourceView {
         _endian: binrw::Endian,
         mrc: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<Self> {
-        let stride = reader.read_le()?;
-        let view_type = reader.read_le()?;
+        let stride: u8 = reader.read_le()?;
+        let view_type = reader.read_le::<VertexBufferViewType>()?;
+
+        if stride != view_type.stride() {
+            return Err(binrw::Error::AssertFail {
+                pos: reader.stream_position().unwrap_or(0),
+                message: format!(
+                    "serialised stride {stride} does not match expected stride {} for {view_type}",
+                    view_type.stride()
+                ),
+            });
+        }
+
         let unknown_u16 = reader.read_le()?;
         let unknown_u32_1 = reader.read_le()?;
         let unknown_u32_2 = reader.read_le()?;
@@ -41,11 +51,17 @@ impl binrw::BinRead for VertexBufferResourceView {
         res_cur.seek(SeekFrom::Start(resource_start.into()))?;
 
         let mut resource = vec![0u8; resource_size as usize];
-
         res_cur.read_exact(&mut resource)?;
 
+        let resource = resource
+            .as_chunks()
+            .0
+            .into_iter()
+            .copied()
+            .map(f32::from_le_bytes)
+            .collect();
+
         Ok(Self {
-            stride,
             view_type,
             unknown_u16,
             unknown_u32_1,
@@ -67,7 +83,6 @@ impl binrw::BinWrite for VertexBufferResourceView {
         mwc: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<()> {
         let Self {
-            stride,
             view_type,
             unknown_u16,
             unknown_u32_1,
@@ -79,7 +94,8 @@ impl binrw::BinWrite for VertexBufferResourceView {
 
         let mut resource_start = *resource_start;
 
-        writer.write_le(stride)?;
+        let stride = view_type.stride();
+        writer.write_le(&stride)?;
         writer.write_le(view_type)?;
         writer.write_le(unknown_u16)?;
         writer.write_le(unknown_u32_1)?;
@@ -114,7 +130,7 @@ impl binrw::BinWrite for VertexBufferResourceView {
         }
 
         writer.write_le(&resource_start)?;
-        writer.write_le(&(resource.len() as u32))?;
+        writer.write_le(&(self.len() as u32))?;
 
         Ok(())
     }
@@ -128,56 +144,9 @@ impl VertexBufferResourceView {
         Ok(reader.read_le_args(mrc)?)
     }
 
-    pub fn add_to_gltf(
-        &self,
-        gltf: &mut gltf_writer::gltf::Gltf,
-        buffer_view_index: gltf_writer::GltfIndex,
-    ) -> Result<gltf_writer::GltfIndex, crate::Error> {
-        if self.resource.is_empty() {
-            return Err("empty resource".into());
-        }
-
-        match self.view_type {
-            VertexBufferViewType::Position => {
-                let num_vertices = self.resource.len() / 12;
-
-                Ok(gltf.add_accessor(gltf_writer::gltf::Accessor::new(
-                    buffer_view_index,
-                    // self.view_start as usize,
-                    0,
-                    gltf_writer::gltf::AccessorDataType::F32,
-                    num_vertices,
-                    gltf_writer::gltf::AccessorComponentCount::VEC3,
-                )))
-            }
-            VertexBufferViewType::UV => {
-                let num_vertices = self.resource.len() / 8;
-
-                Ok(gltf.add_accessor(gltf_writer::gltf::Accessor::new(
-                    buffer_view_index,
-                    // self.view_start as usize,
-                    0,
-                    gltf_writer::gltf::AccessorDataType::F32,
-                    num_vertices,
-                    gltf_writer::gltf::AccessorComponentCount::VEC2,
-                )))
-            }
-            VertexBufferViewType::Normal
-            | VertexBufferViewType::Colour
-            | VertexBufferViewType::Unknown12
-            | VertexBufferViewType::SkinWeight
-            | VertexBufferViewType::Unknown14
-            | VertexBufferViewType::Unknown15
-            | VertexBufferViewType::Unknown16
-            | VertexBufferViewType::Skin
-            | VertexBufferViewType::KnknownFF => {
-                Err(format!("VertexBufferViewType {:?} not implemented.", self.view_type).into())
-            }
-        }
-    }
-
+    /// The length of the resource in bytes
     pub fn len(&self) -> usize {
-        self.resource.len()
+        4 * self.resource.len()
     }
 
     #[must_use]
@@ -186,7 +155,7 @@ impl VertexBufferResourceView {
     }
 
     pub fn stride(&self) -> u8 {
-        self.stride
+        self.view_type().stride()
     }
 
     pub fn start(&self) -> u32 {
@@ -200,7 +169,7 @@ impl VertexBufferResourceView {
     /// Number of entries in this resource view
     /// Equal by length / stride
     pub fn num_entries(&self) -> usize {
-        (self.resource.len() as u32 / u32::from(self.stride)) as usize
+        (self.resource.len() as u32 / u32::from(self.stride() / 4)) as usize
     }
 
     pub fn view_type(&self) -> VertexBufferViewType {
@@ -217,6 +186,7 @@ impl VertexBufferResourceView {
     serde::Serialize,
     num_enum::IntoPrimitive,
     num_enum::TryFromPrimitive,
+    strum::Display,
 )]
 #[binrw::binrw]
 #[brw(repr = u8)]
@@ -232,6 +202,22 @@ pub enum VertexBufferViewType {
     Unknown15 = 0xf,
     Unknown16 = 0x10,
     KnknownFF = 0xff,
+}
+
+impl VertexBufferViewType {
+    pub const fn stride(&self) -> u8 {
+        match self {
+            VertexBufferViewType::Position | VertexBufferViewType::Normal => 0xc,
+            VertexBufferViewType::Skin
+            | VertexBufferViewType::SkinWeight
+            | VertexBufferViewType::UV
+            | VertexBufferViewType::Unknown14
+            | VertexBufferViewType::Unknown16
+            | VertexBufferViewType::Unknown15 => 0x8,
+            VertexBufferViewType::Unknown12 | VertexBufferViewType::Colour => 0x4,
+            VertexBufferViewType::KnknownFF => todo!(),
+        }
+    }
 }
 
 /// Marker trait for a vertex buffer resource view

@@ -493,11 +493,13 @@ dependencies = [
 
 [[package]]
 name = "gltf_writer"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
+ "paste",
  "serde",
  "serde_json",
  "serde_repr",
+ "strum",
 ]
 
 [[package]]

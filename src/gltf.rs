@@ -1,4 +1,6 @@
-use gltf_writer::gltf::{self, Gltf, GltfIndex};
+use binrw::BinWriterExt;
+use gltf_writer::GltfIndex;
+use image::EncodableLayout;
 
 use crate::asset::{
     AssetParseError,
@@ -8,7 +10,7 @@ use crate::asset::{
     },
 };
 
-impl TryFrom<Model> for Gltf {
+impl TryFrom<Model> for gltf_writer::Gltf {
     type Error = crate::Error;
 
     fn try_from(value: Model) -> Result<Self, Self::Error> {
@@ -40,7 +42,7 @@ impl TryFrom<Model> for Gltf {
             subresource0x15: _,
         } = value;
 
-        let mut gltf = Gltf::default();
+        let mut gltf = Self::default();
 
         if let Some(textures_subresource) = textures_subresource {
             // Load all textures first, because we need to assign them based on index
@@ -52,7 +54,7 @@ impl TryFrom<Model> for Gltf {
                     .dump_png_bytes(&mut png)
                     .map_err(|e| AssetParseError::InvalidDataViews(format!("{:?}", e)))?;
 
-                let image_index = gltf.add_image(gltf::Image {
+                let image_index = gltf.add_image(gltf_writer::Image {
                     uri: Some(format!("image{}.png", i)),
                     data: png,
                     name: format!("Image {}", i),
@@ -61,7 +63,7 @@ impl TryFrom<Model> for Gltf {
                     buffer_view_index: None,
                 });
 
-                gltf.add_texture(gltf::Texture {
+                gltf.add_texture(gltf_writer::Texture {
                     image_index: Some(image_index),
                     name: format!("image{}", i),
                 });
@@ -75,7 +77,7 @@ impl TryFrom<Model> for Gltf {
             ..Default::default()
         };
 
-        let mut scene = gltf::Scene {
+        let mut scene = gltf_writer::Scene {
             name: "Main Scene".to_owned(),
             root_nodes: vec![],
         };
@@ -93,8 +95,9 @@ impl TryFrom<Model> for Gltf {
         let scene_index = gltf.add_scene(scene);
         gltf.set_default_scene(Some(scene_index));
 
-        gltf.prepare_for_export()
-            .map_err(|e| AssetParseError::InvalidDataViews(format!("{:?}", e)))?;
+        gltf.prepare_for_export().map_err(|e| {
+            AssetParseError::InvalidDataViews(format!("failed to prepare gltf for export: {e:?}"))
+        })?;
         Ok(gltf)
     }
 }
@@ -104,12 +107,13 @@ pub struct NdGltfContext {
     pub(crate) current_node_name: Option<String>,
     pub(crate) properties: indexmap::IndexMap<String, Vec<u8>>,
 
-    pub(crate) gltf: Gltf,
+    pub(crate) gltf: gltf_writer::Gltf,
     pub(crate) positions_accessor: Option<GltfIndex>,
     pub(crate) uv_accessor: Option<GltfIndex>,
     pub(crate) skin_accessor: Option<GltfIndex>,
-    pub(crate) skin_weight_accessor: Option<GltfIndex>,
-    pub(crate) normal_accessor: Option<GltfIndex>,
+    pub(crate) skin_weights_accessor: Option<GltfIndex>,
+    pub(crate) normals_accessor: Option<GltfIndex>,
+    pub(crate) colours_accessor: Option<GltfIndex>,
 
     pub(crate) current_skin: Option<GltfIndex>,
 
@@ -129,7 +133,7 @@ impl NdGltfContext {
         self.node_stack.push(child_index);
     }
 
-    pub fn pop_node(&mut self) -> Option<&mut gltf::Node> {
+    pub fn pop_node(&mut self) -> Option<&mut gltf_writer::Node> {
         if let Some(popped) = self.node_stack.pop() {
             return Some(self.gltf.nodes_mut().get_mut(popped as usize).unwrap());
         }
@@ -137,7 +141,7 @@ impl NdGltfContext {
         None
     }
 
-    pub fn current_node(&mut self) -> Option<&mut gltf::Node> {
+    pub fn current_node(&mut self) -> Option<&mut gltf_writer::Node> {
         match self.node_stack.last() {
             Some(index) => self.gltf.nodes_mut().get_mut(*index as usize),
             None => None,
@@ -150,6 +154,28 @@ impl NdGltfContext {
         }
 
         Some(*self.node_stack.last().unwrap())
+    }
+
+    pub fn set_accessor(
+        &mut self,
+        view_type: VertexBufferViewType,
+        index: GltfIndex,
+    ) -> Result<Option<GltfIndex>, crate::Error> {
+        Ok(match view_type {
+            VertexBufferViewType::Skin => self.skin_accessor.replace(index),
+            VertexBufferViewType::SkinWeight => self.skin_weights_accessor.replace(index),
+            VertexBufferViewType::Position => self.positions_accessor.replace(index),
+            VertexBufferViewType::Normal => self.normals_accessor.replace(index),
+            VertexBufferViewType::Colour => self.colours_accessor.replace(index),
+            VertexBufferViewType::UV => self.uv_accessor.replace(index),
+            VertexBufferViewType::Unknown12
+            | VertexBufferViewType::Unknown14
+            | VertexBufferViewType::Unknown15
+            | VertexBufferViewType::Unknown16
+            | VertexBufferViewType::KnknownFF => {
+                return Err(format!("{view_type} accessor unimplemented").into());
+            }
+        })
     }
 }
 
@@ -253,28 +279,46 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
 
         let skeleton_index = ctx
             .gltf
-            .add_node(gltf::Node::new(Some("ndSkeleton".to_owned())));
+            .add_node(gltf_writer::Node::new(Some("ndSkeleton".to_owned())));
 
-        let root_index = ctx.gltf.add_node(gltf::Node::new(Some("BASE".to_string())));
+        // TODO: Get this bone name from the properties instead?
+        let root_bone_index = {
+            let root = ctx
+                .gltf
+                .add_node(gltf_writer::Node::new(Some("BASE".to_string())));
 
-        let mut new_skin = gltf::Skin::default();
-        new_skin.joints.push(root_index);
+            // add root to skeleton as
+            ctx.gltf
+                .node_mut(skeleton_index)
+                .ok_or("no skeleton")?
+                .add_child(root);
 
-        for (i, bone) in self.bones.iter().enumerate().skip(1) {
+            root
+        };
+
+        let mut new_skin = gltf_writer::Skin::default();
+
+        for (i, bone) in self.bones.iter().enumerate() {
             // If bone doesn't match expected index
             if bone.id as usize != i {
                 return Err(format!("Bone mismatch (expected {i}, got {})", bone.id).into());
             }
 
-            if bone.parent_id as usize >= new_skin.joints.len() {
+            if (bone.parent_id != u16::MAX)  // ignore root bone
+                && bone.parent_id as usize >= new_skin.joints.len()
+            {
                 return Err("parent bone doesn't exist".into());
             }
 
-            let mut bone_node = gltf::Node::new(Some(
+            let name = if i == 0 {
+                "BASE".to_owned()
+            } else {
                 // TODO: Put name on bone
-                format!("bone{i}"),
-            ));
-            bone_node.set_transform(Some(gltf::NodeTransform::TRS(
+                format!("bone{i}")
+            };
+
+            let mut bone_node = gltf_writer::Node::new(Some(name));
+            bone_node.set_transform(Some(gltf_writer::NodeTransform::TRS(
                 bone.local_transform,
                 [0f32, 0f32, 0f32],
                 [1f32, 1f32, 1f32],
@@ -282,17 +326,21 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
 
             // Add the new child node (bone), and parent it to its parent
             let bone_index = ctx.gltf.add_node(bone_node);
+
+            let parent_index = if bone.parent_id == u16::MAX {
+                root_bone_index
+            } else {
+                *new_skin
+                    .joints
+                    .get(bone.parent_id as usize)
+                    .ok_or_else(|| {
+                        format!("failed to get node for bone's parent {}", bone.parent_id)
+                    })?
+            };
+
             ctx.gltf
-                .nodes_mut()
-                .get_mut(
-                    new_skin
-                        .joints
-                        .get(bone.parent_id as usize)
-                        .cloned()
-                        .ok_or(AssetParseError::ErrorParsingDescriptor)?
-                        as usize,
-                )
-                .ok_or(AssetParseError::ErrorParsingDescriptor)?
+                .node_mut(parent_index)
+                .ok_or(format!("failed to get parent node {parent_index}"))?
                 .add_child(bone_index);
 
             new_skin.joints.push(bone_index);
@@ -315,8 +363,8 @@ impl NdGltfAdd for crate::asset::model::nd::NdPushBufferData {
             .flat_map(|index| index.to_le_bytes())
             .collect::<Vec<u8>>();
 
-        let buffer_index = ctx.gltf.add_buffer(gltf::Buffer::new(&index_buffer));
-        let ib_view_index = ctx.gltf.add_buffer_view(gltf::BufferView {
+        let buffer_index = ctx.gltf.add_buffer(gltf_writer::Buffer::new(&index_buffer));
+        let ib_view_index = ctx.gltf.add_buffer_view(gltf_writer::BufferView {
             buffer_index,
             byte_offset: 0,
             byte_length: index_buffer.len(),
@@ -329,17 +377,17 @@ impl NdGltfAdd for crate::asset::model::nd::NdPushBufferData {
         let mut index_start = 0;
 
         for draw_call in &self.draw_calls {
-            let ib_accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
+            let ib_accessor_index = ctx.gltf.add_accessor(gltf_writer::Accessor::new(
                 ib_view_index,
                 index_start * 2,
-                gltf::AccessorDataType::U16,
+                gltf_writer::AccessorDataType::U16,
                 draw_call.indices.len(),
-                gltf::AccessorComponentCount::SCALAR,
+                gltf_writer::AccessorComponentCount::SCALAR,
             ));
 
             index_start += draw_call.indices.len();
 
-            let mut primitive = gltf::Primitive {
+            let mut primitive = gltf_writer::Primitive {
                 indices_accessor: Some(ib_accessor_index),
                 topology_type: match draw_call.prim_type.try_into() {
                     Ok(val) => Some(val),
@@ -354,27 +402,30 @@ impl NdGltfAdd for crate::asset::model::nd::NdPushBufferData {
             };
 
             if let Some(positions_accessor) = ctx.positions_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::Position, positions_accessor);
+                primitive.set_attribute(gltf_writer::VertexAttribute::Position, positions_accessor);
             } else {
                 eprintln!("No positions accessor available.");
             }
 
             if let Some(uv_accessor) = ctx.uv_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::TexCoord(0), uv_accessor);
+                primitive.set_attribute(gltf_writer::VertexAttribute::TexCoord(0), uv_accessor);
             } else {
                 eprintln!("No texcoords accessor available.");
             }
 
             if let Some(skin_accessor) = ctx.skin_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::Joints(0), skin_accessor);
+                primitive.set_attribute(gltf_writer::VertexAttribute::Joints(0), skin_accessor);
             }
 
-            if let Some(skin_weight_accessor) = ctx.skin_weight_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::Weights(0), skin_weight_accessor);
+            if let Some(skin_weight_accessor) = ctx.skin_weights_accessor {
+                primitive.set_attribute(
+                    gltf_writer::VertexAttribute::Weights(0),
+                    skin_weight_accessor,
+                );
             }
 
-            if let Some(normal_accessor) = ctx.normal_accessor {
-                primitive.set_attribute(gltf::VertexAttribute::Normal, normal_accessor);
+            if let Some(normal_accessor) = ctx.normals_accessor {
+                primitive.set_attribute(gltf_writer::VertexAttribute::Normal, normal_accessor);
             } else {
                 // eprintln!("No normals accessor available.");
             }
@@ -384,16 +435,16 @@ impl NdGltfAdd for crate::asset::model::nd::NdPushBufferData {
 
         let index = ctx.current_node_index().unwrap() as usize;
 
-        let mesh: &mut gltf::Mesh = match ctx.gltf.meshes_mut().get_mut(index) {
+        let mesh: &mut gltf_writer::Mesh = match ctx.gltf.meshes_mut().get_mut(index) {
             Some(val) => val,
             None => {
                 let new_mesh_index = {
-                    let new_mesh = gltf::Mesh::new("New Mesh".to_owned());
+                    let new_mesh = gltf_writer::Mesh::new("New Mesh".to_owned());
                     ctx.gltf.add_mesh(new_mesh)
                 };
 
                 let new_node_index = {
-                    let new_node = gltf::Node::new(Some("Mesh Node".to_owned()));
+                    let new_node = gltf_writer::Node::new(Some("Mesh Node".to_owned()));
                     ctx.gltf.add_node(new_node)
                 };
 
@@ -481,7 +532,7 @@ impl NdGltfAdd for crate::asset::model::nd::NdShaderParam2Data {
                     .texture_assignments
                     .get(bound_texture_index as usize)
             {
-                Some(gltf::TextureInfo {
+                Some(gltf_writer::TextureInfo {
                     texture_index: bound_texture
                         .texture_index
                         .0
@@ -498,9 +549,9 @@ impl NdGltfAdd for crate::asset::model::nd::NdShaderParam2Data {
                 None
             };
 
-            gltf::Material {
+            gltf_writer::Material {
                 name,
-                pbr_metallic_roughness: Some(gltf::PBRMetallicRoughness {
+                pbr_metallic_roughness: Some(gltf_writer::PBRMetallicRoughness {
                     base_color_texture,
                     metallic_factor: Some(0.0),
                     ..Default::default()
@@ -517,95 +568,150 @@ impl NdGltfAdd for crate::asset::model::nd::NdShaderParam2Data {
 
 impl NdGltfAdd for crate::asset::model::nd::NdVertexBufferData {
     fn create_gltf_node(&self, ctx: &mut NdGltfContext) -> Result<Option<GltfIndex>, crate::Error> {
-        // Get size of buffer
-        let (min, max) =
-            self.resource_views
-                .iter()
-                .fold((u32::MAX, u32::MIN), |(min, max), view| {
-                    (
-                        min.min(view.start()), //
-                        max.max(view.end()),
-                    )
-                });
+        let buffer_i = ctx.gltf.add_buffer(gltf_writer::Buffer::new([]));
 
-        let res_size = (max - min) as usize;
-
-        let res_bytes = self
-            .resource_views
-            .iter()
-            .flat_map(|res_view| res_view.resource.iter().cloned())
-            .collect::<Vec<_>>();
-
-        if res_bytes.len() != res_size {
-            return Err(format!(
-                "res size {} does not match expected size {res_size}",
-                res_bytes.len()
-            )
-            .into());
-        }
-
-        let gb = gltf::Buffer::new(&res_bytes);
-        let buffer_index = ctx.gltf.add_buffer(gb);
-
-        for res_view in &self.resource_views {
-            if res_view.is_empty() {
+        for resource_view in &self.resource_views {
+            if resource_view.is_empty() {
                 continue;
             }
 
-            let buffer_view_index = ctx.gltf.add_buffer_view(gltf::BufferView::new(
-                buffer_index,
-                res_view.start() as usize,
-                res_view.len(),
-                Some(res_view.stride() as usize),
-                Some(34962),
-            ));
+            let num_vertices = resource_view.len() / usize::from(resource_view.stride());
 
-            if res_view.view_type() == VertexBufferViewType::Position
-                && ctx.positions_accessor.is_none()
-            {
-                let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
-                    buffer_view_index,
-                    0,
-                    gltf::AccessorDataType::F32,
-                    res_view.num_entries(),
-                    gltf::AccessorComponentCount::VEC3,
-                ));
+            let buffer_len = ctx.gltf.buffer_mut(buffer_i).ok_or("no buffer")?.data.len();
 
-                ctx.positions_accessor = Some(accessor_index);
-            } else {
-                match res_view.add_to_gltf(&mut ctx.gltf, buffer_view_index) {
-                    Ok(accessor_index) => {
-                        if res_view.view_type() == VertexBufferViewType::UV
-                            && ctx.uv_accessor.is_none()
-                        {
-                            /*
-                            let accessor_index = ctx.gltf.add_accessor(gltf::Accessor::new(
-                                buffer_view_index,
-                                0,
-                                gltf::AccessorDataType::F32,
-                                res_view.len() / 8,
-                                gltf::AccessorComponentCount::VEC2,
-                            ));
-                            */
-
-                            ctx.uv_accessor = Some(accessor_index);
-                        } else if res_view.view_type() == VertexBufferViewType::Skin {
-                            ctx.skin_accessor = Some(accessor_index)
-                        } else if res_view.view_type() == VertexBufferViewType::SkinWeight {
-                            ctx.skin_weight_accessor = Some(accessor_index)
-                        } /*
-                        else if res_view.view_type() == VertexBufferViewType::Normal {
-                        ctx.normal_accessor = Some(accessor_index)
+            let accessor_index = match resource_view.view_type {
+                VertexBufferViewType::Position
+                | VertexBufferViewType::Normal
+                | VertexBufferViewType::UV
+                | VertexBufferViewType::Colour => {
+                    let component_count = match resource_view.view_type {
+                        VertexBufferViewType::Position | VertexBufferViewType::Normal => {
+                            gltf_writer::AccessorComponentCount::VEC3
                         }
-                         */
+                        VertexBufferViewType::UV => gltf_writer::AccessorComponentCount::VEC2,
+                        VertexBufferViewType::Colour => gltf_writer::AccessorComponentCount::SCALAR,
+
+                        VertexBufferViewType::Skin
+                        | VertexBufferViewType::SkinWeight
+                        | VertexBufferViewType::Unknown12
+                        | VertexBufferViewType::Unknown14
+                        | VertexBufferViewType::Unknown15
+                        | VertexBufferViewType::Unknown16
+                        | VertexBufferViewType::KnknownFF => {
+                            unreachable!()
+                        }
+                    };
+
+                    let bvi = ctx.gltf.add_buffer_view(gltf_writer::BufferView::new(
+                        buffer_i,
+                        buffer_len,
+                        resource_view.len(),
+                        None,
+                        // Some(resource_view.stride().into()),
+                        None,
+                    ));
+
+                    // TODO: Force this to be little endina
+                    ctx.gltf
+                        .buffer_mut(buffer_i)
+                        .ok_or("no buffer")?
+                        .data
+                        .extend_from_slice(resource_view.resource.as_bytes());
+
+                    Some(ctx.gltf.add_accessor(gltf_writer::Accessor::new(
+                        bvi,
+                        0,
+                        gltf_writer::AccessorDataType::F32,
+                        num_vertices,
+                        component_count,
+                    )))
+                }
+                VertexBufferViewType::Skin => {
+                    let mut resource = Vec::with_capacity(resource_view.len());
+
+                    let mut cur = std::io::Cursor::new(&mut resource);
+
+                    println!("warning: model assumed to have bones starting at VS register 24");
+
+                    for [s1, s2] in resource_view.resource.as_chunks::<2>().0 {
+                        cur.write_le(&((*s1 as u16).saturating_sub(24)))?;
+                        cur.write_le(&((*s2 as u16).saturating_sub(24)))?;
+                        cur.write_le(&[0u16; 2])?;
                     }
-                    Err(e) => {
-                        eprintln!(
-                            "Unable to add bv {} to gltf file.\nError: {}",
-                            buffer_view_index, e
-                        );
+
+                    let bvi = ctx.gltf.add_buffer_view(gltf_writer::BufferView::new(
+                        buffer_i,
+                        buffer_len,
+                        resource.len(),
+                        None,
+                        // Some(16),
+                        None,
+                    ));
+
+                    ctx.gltf
+                        .buffer_mut(buffer_i)
+                        .ok_or("no buffer")?
+                        .data
+                        .extend_from_slice(&resource);
+
+                    Some(ctx.gltf.add_accessor(gltf_writer::Accessor::new(
+                        bvi,
+                        0,
+                        gltf_writer::AccessorDataType::U16,
+                        num_vertices,
+                        gltf_writer::AccessorComponentCount::VEC4,
+                    )))
+                }
+                VertexBufferViewType::SkinWeight => {
+                    let mut resource = Vec::with_capacity(resource_view.len());
+
+                    let mut cur = std::io::Cursor::new(&mut resource);
+
+                    for [f1, f2] in resource_view.resource.as_chunks::<2>().0 {
+                        cur.write_le(&f1)?;
+                        cur.write_le(&f2)?;
+                        cur.write_le(&[0u32; 2])?;
                     }
-                };
+
+                    let bvi = ctx.gltf.add_buffer_view(gltf_writer::BufferView::new(
+                        buffer_i,
+                        buffer_len,
+                        resource.len(),
+                        None,
+                        // Some(16),
+                        None,
+                    ));
+
+                    ctx.gltf
+                        .buffer_mut(buffer_i)
+                        .ok_or("no buffer")?
+                        .data
+                        .extend_from_slice(&resource);
+
+                    Some(ctx.gltf.add_accessor(gltf_writer::Accessor::new(
+                        bvi,
+                        0,
+                        gltf_writer::AccessorDataType::F32,
+                        num_vertices,
+                        gltf_writer::AccessorComponentCount::VEC4,
+                    )))
+                }
+                VertexBufferViewType::Unknown12
+                | VertexBufferViewType::Unknown14
+                | VertexBufferViewType::Unknown15
+                | VertexBufferViewType::Unknown16
+                | VertexBufferViewType::KnknownFF => {
+                    eprintln!(
+                        "unimplemented res view {} for gltf",
+                        resource_view.view_type
+                    );
+
+                    continue;
+                }
+            };
+
+            if let Some(accessor_index) = accessor_index {
+                ctx.set_accessor(resource_view.view_type, accessor_index)?;
             }
         }
 

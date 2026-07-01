@@ -27,7 +27,8 @@ fn full_model_2() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     let mut gltf = gltf_writer::Gltf::try_from(model.clone())?;
-    gltf.prepare_for_export().map_err(|e| format!("{e:?}"))?;
+    gltf.prepare_for_export()
+        .map_err(|e| format!("failed to prepare for export: {e:?}"))?;
 
     let _ = std::fs::remove_file("./out/HELLO.gltf");
 
