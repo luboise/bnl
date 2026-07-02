@@ -1,4 +1,4 @@
-use binrw::BinWriterExt;
+use binrw::{BinWrite, BinWriterExt};
 use gltf_writer::GltfIndex;
 use image::EncodableLayout;
 
@@ -70,10 +70,53 @@ impl TryFrom<Model> for gltf_writer::Gltf {
             }
         }
 
+        let current_material = (!gltf.textures().is_empty()).then(|| {
+            gltf.add_material(gltf_writer::Material {
+                name: "Default Material".to_owned(),
+                pbr_metallic_roughness: Some(gltf_writer::PBRMetallicRoughness {
+                    base_color_texture: Some(gltf_writer::TextureInfo {
+                        texture_index: 0,
+                        texcoords_accessor: None,
+                    }),
+                    ..Default::default()
+                }),
+            })
+        });
+
+        /*
+        let default_material = {
+            let base_color_texture = if let Some(bound_texture_index) =
+                attrib.texture_assignment_index.0
+                && let Some(bound_texture) = main_payload
+                    .texture_assignments
+                    .get(bound_texture_index as usize)
+            {
+            } else {
+                eprintln!(
+                    "Texture slot {:?} is referenced by an ndShaderParam, but the param only assigns {} slots.",
+                    attrib.texture_assignment_index.0,
+                    main_payload.texture_assignments.len()
+                );
+
+                None
+            };
+
+            gltf_writer::Material {
+                name,
+                pbr_metallic_roughness: Some(gltf_writer::PBRMetallicRoughness {
+                    base_color_texture,
+                    metallic_factor: Some(0.0),
+                    ..Default::default()
+                }),
+            }
+        };
+        */
+
         let mut ctx = NdGltfContext {
             gltf,
             properties: model_subresource.properties,
             current_scene: 0,
+            current_material,
             ..Default::default()
         };
 
@@ -172,6 +215,14 @@ impl NdGltfContext {
             | VertexBufferViewType::Unknown14
             | VertexBufferViewType::Unknown15
             | VertexBufferViewType::Unknown16
+            | VertexBufferViewType::Unknown0x1b
+            | VertexBufferViewType::Unknown0x1c
+            | VertexBufferViewType::Unknown0x1d
+            | VertexBufferViewType::Unknown0x1e 
+            | VertexBufferViewType::Unknown0x1f
+            | VertexBufferViewType::Unknown0x20 
+            | VertexBufferViewType::Unknown0x21
+            | VertexBufferViewType::Unknown0x22
             | VertexBufferViewType::KnknownFF => {
                 return Err(format!("{view_type} accessor unimplemented").into());
             }
@@ -189,13 +240,18 @@ pub fn insert_into_gltf_heirarchy(
         && ctx.current_material.is_none()
     {
         eprintln!(
-            "failed to add material from ndShaderParam2 {}. skipping this subtree.",
+            "unable to add ndShaderParam2 {} with no material set. skipping this subtree.",
             nd.name
                 .as_ref()
                 .map(|name| format!("({name})"))
                 .unwrap_or_default()
         );
+
         return Ok(node_index_opt);
+    }
+
+    if nd.nd_type() == crate::asset::model::nd::NdType::BlendShape {
+        return Ok(None)
     }
 
     let type_string = nd.nd_type().to_string();
@@ -254,10 +310,21 @@ impl NdGltfAdd for Nd {
             NdData::VertexBuffer(data) => data.create_gltf_node(ctx),
             NdData::PushBuffer(data) => data.create_gltf_node(ctx),
             NdData::BGPushBuffer(_data) => todo!(),
-            NdData::ShaderParam2(data) => data.create_gltf_node(ctx),
+            NdData::ShaderParam2(data) => data.create_gltf_node(ctx).inspect_err(|e| {
+                eprintln!(
+                    "failed to add material from ndShaderParam2 {}. unsetting current material: {e}",
+                    self.name
+                        .as_ref()
+                        .map(|name| format!("({name})"))
+                        .unwrap_or_default()
+                );
+
+                ctx.current_material = None;
+            }),
             NdData::Shader2(_)
             | NdData::VertexShader(_)
             | NdData::MtxArray(_)
+            | NdData::BlendShape(_) 
             | NdData::RigidSkin(_) => Ok(None),
         }?;
 
@@ -297,6 +364,9 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
         };
 
         let mut new_skin = gltf_writer::Skin::default();
+
+        let mut inverse_bind_bytes = Vec::with_capacity(self.bones.len() * (4 * 16));
+        let mut inverse_bind_cur = std::io::Cursor::new(&mut inverse_bind_bytes);
 
         for (i, bone) in self.bones.iter().enumerate() {
             // If bone doesn't match expected index
@@ -338,6 +408,18 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
                     })?
             };
 
+            let [tx, ty, tz] = bone.global_transform;
+
+            #[rustfmt::skip]
+            let inverse_bind_matrix = [
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [-tx, -ty, -tz, 1.0],
+            ];
+
+            inverse_bind_cur.write_le(&inverse_bind_matrix)?;
+
             ctx.gltf
                 .node_mut(parent_index)
                 .ok_or(format!("failed to get parent node {parent_index}"))?
@@ -345,6 +427,24 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
 
             new_skin.joints.push(bone_index);
         }
+
+        assert_eq!(inverse_bind_bytes.len(), inverse_bind_bytes.capacity());
+
+        let buffer_index = ctx.gltf.add_buffer(gltf_writer::Buffer::new(&inverse_bind_bytes));
+        let bvi = ctx.gltf.add_buffer_view(gltf_writer::BufferView{
+            buffer_index,
+            byte_offset: 0, 
+            byte_length: inverse_bind_bytes.len(),
+            byte_stride: None,
+            target: None
+         });
+
+        // TODO: Assert num inverse binds == num bones
+        
+        let ibm_accessor = ctx.gltf.add_accessor(gltf_writer::Accessor::new(bvi, 0, gltf_writer::AccessorDataType::F32, inverse_bind_bytes.len() / (4 * 16), gltf_writer::AccessorComponentCount::MAT4));
+
+        new_skin.inverse_bind_matrices = Some(ibm_accessor);
+
 
         let new_skin_index = ctx.gltf.add_skin(new_skin);
 
@@ -509,7 +609,6 @@ impl NdGltfAdd for crate::asset::model::nd::NdShaderParam2Data {
             .iter()
             .find_map(|v| (str::from_utf8(&v.name.0).ok()? == attrib_key).then_some(v))
         else {
-            ctx.current_material = None;
             return Ok(None);
         };
 
@@ -597,6 +696,14 @@ impl NdGltfAdd for crate::asset::model::nd::NdVertexBufferData {
                         | VertexBufferViewType::Unknown14
                         | VertexBufferViewType::Unknown15
                         | VertexBufferViewType::Unknown16
+                        | VertexBufferViewType::Unknown0x1b   
+                        | VertexBufferViewType::Unknown0x1c   
+                        | VertexBufferViewType::Unknown0x1d   
+                        | VertexBufferViewType::Unknown0x1e   
+                        | VertexBufferViewType::Unknown0x1f   
+                        | VertexBufferViewType::Unknown0x20   
+                        | VertexBufferViewType::Unknown0x21   
+                        | VertexBufferViewType::Unknown0x22   
                         | VertexBufferViewType::KnknownFF => {
                             unreachable!()
                         }
@@ -634,8 +741,8 @@ impl NdGltfAdd for crate::asset::model::nd::NdVertexBufferData {
                     println!("warning: model assumed to have bones starting at VS register 24");
 
                     for [s1, s2] in resource_view.resource.as_chunks::<2>().0 {
-                        cur.write_le(&((*s1 as u16).saturating_sub(24)))?;
-                        cur.write_le(&((*s2 as u16).saturating_sub(24)))?;
+                        cur.write_le(&((s1.round() as u16).saturating_sub(24)))?;
+                        cur.write_le(&((s2.round() as u16).saturating_sub(24)))?;
                         cur.write_le(&[0u16; 2])?;
                     }
 
@@ -668,9 +775,9 @@ impl NdGltfAdd for crate::asset::model::nd::NdVertexBufferData {
                     let mut cur = std::io::Cursor::new(&mut resource);
 
                     for [f1, f2] in resource_view.resource.as_chunks::<2>().0 {
-                        cur.write_le(&f1)?;
-                        cur.write_le(&f2)?;
-                        cur.write_le(&[0u32; 2])?;
+                        cur.write_le(f1)?;
+                        cur.write_le(f2)?;
+                        cur.write_le(&[0f32; 2])?;
                     }
 
                     let bvi = ctx.gltf.add_buffer_view(gltf_writer::BufferView::new(
@@ -700,6 +807,14 @@ impl NdGltfAdd for crate::asset::model::nd::NdVertexBufferData {
                 | VertexBufferViewType::Unknown14
                 | VertexBufferViewType::Unknown15
                 | VertexBufferViewType::Unknown16
+                | VertexBufferViewType::Unknown0x1b 
+                | VertexBufferViewType::Unknown0x1c
+                | VertexBufferViewType::Unknown0x1d
+                | VertexBufferViewType::Unknown0x1e
+                | VertexBufferViewType::Unknown0x1f
+                | VertexBufferViewType::Unknown0x20
+                | VertexBufferViewType::Unknown0x21
+                | VertexBufferViewType::Unknown0x22
                 | VertexBufferViewType::KnknownFF => {
                     eprintln!(
                         "unimplemented res view {} for gltf",

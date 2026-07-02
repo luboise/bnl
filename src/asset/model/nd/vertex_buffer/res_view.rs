@@ -201,13 +201,38 @@ pub enum VertexBufferViewType {
     Unknown14 = 0xe,
     Unknown15 = 0xf,
     Unknown16 = 0x10,
+    /// morph target 1?
+    Unknown0x1b = 0x1b,
+    /// morph target 2?
+    Unknown0x1c = 0x1c,
+    /// morph target 3?
+    Unknown0x1d = 0x1d,
+    /// morph target 4?
+    Unknown0x1e = 0x1e,
+    /// morph target 5?
+    Unknown0x1f = 0x1f,
+    /// morph target 6?
+    Unknown0x20 = 0x20,
+    /// morph target 6?
+    Unknown0x21 = 0x21,
+    /// morph target 7?
+    Unknown0x22 = 0x22,
     KnknownFF = 0xff,
 }
 
 impl VertexBufferViewType {
     pub const fn stride(&self) -> u8 {
         match self {
-            VertexBufferViewType::Position | VertexBufferViewType::Normal => 0xc,
+            VertexBufferViewType::Position
+            | VertexBufferViewType::Normal
+            | VertexBufferViewType::Unknown0x1b
+            | VertexBufferViewType::Unknown0x1c
+            | VertexBufferViewType::Unknown0x1d
+            | VertexBufferViewType::Unknown0x1e
+            | VertexBufferViewType::Unknown0x1f
+            | VertexBufferViewType::Unknown0x20
+            | VertexBufferViewType::Unknown0x21
+            | VertexBufferViewType::Unknown0x22 => 0xc,
             VertexBufferViewType::Skin
             | VertexBufferViewType::SkinWeight
             | VertexBufferViewType::UV

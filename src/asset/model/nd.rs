@@ -311,6 +311,11 @@ pub enum NdData {
     MtxArray(NdMtxArrayData),
     #[br(pre_assert(nd_type == NdType::RigidSkinIdx))]
     RigidSkin(NdRigidSkinIdxData),
+    #[br(pre_assert(nd_type == NdType::BlendShape))]
+    BlendShape(
+        #[br(args_raw(mrc))]
+        NdBlendShapeData
+     ),
 }
 
 impl binrw::BinWrite for NdData {
@@ -332,7 +337,7 @@ impl binrw::BinWrite for NdData {
             NdData::ShaderParam2(data) => data.write_le(writer)?,
             NdData::MtxArray(data) => data.write_le(writer)?,
             NdData::RigidSkin(data) => data.write_le_args(writer, mwc)?,
-            // NdData::Group => data.write_le(writer)?,
+            NdData::BlendShape(data) => data.write_le_args(writer, mwc)?,            // NdData::Group => data.write_le(writer)?,
         }
 
         Ok(())
@@ -352,6 +357,7 @@ impl NdData {
             NdData::ShaderParam2(_) => NdType::ShaderParam2,
             NdData::MtxArray(_) => NdType::MtxArray,
             NdData::RigidSkin(_) => NdType::RigidSkinIdx,
+            NdData::BlendShape(_) => NdType::BlendShape
         }
     }
 
@@ -369,6 +375,7 @@ impl NdData {
             NdData::ShaderParam2(data) => data.name_offset(),
             NdData::MtxArray(data) => data.name_offset(),
             NdData::RigidSkin(..) => 8,
+            NdData::BlendShape(data) => data.name_offset()
         }
     }
 }
@@ -531,8 +538,14 @@ pub struct Bone {
     pub id: u16,
     pub local_transform: [f32; 3],
     pub global_transform: [f32; 3],
-    #[brw(magic = b"\xff\xff\x01\xcd")]
-    _sentinel: (),
+
+
+    pub some_i8_1: i8,
+    pub some_i8_2: i8,
+    pub some_i8_3: i8,
+
+    #[brw(magic = b"\xcd")]
+    _sentinel2: ()
 }
 
 #[binrw::binrw]
@@ -642,7 +655,84 @@ impl binrw::BinWrite for NdRigidSkinIdxData {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct NdBlendShapeData {
+     // #[br(temp)]   nd_ptr: u32,
+     // #[br(temp)]   num_shapes: u32,
+     // #[br(temp, count = num_shapes)]   vertex_buffer_ptrs: Vec<u32>,
 
+    pub nodes: Vec<Nd>,
+}
+
+impl NdBlendShapeData {
+    pub fn name_offset(&self) -> i64 {
+            // goes after all of the vertex buffers, realistically need to serialise (or calculate)
+            // the full size 
+        
+
+        let mut v = vec![];
+
+
+        let mut cur = std::io::Cursor::new(&mut v);
+
+
+        let mwc = new_write_context();
+
+        for node in &self.nodes {
+            cur.write_le_args(node, mwc.clone()).unwrap();
+        }
+
+        // TODO: CHECK THAT THIS IS CORRECT
+        (4      // nd_ptr
+         + 4    // num_shapes
+         + 4 * self.nodes.len()     // node pointers
+         + v.len() // vertex buffer nodes
+         ) as i64
+    }
+}
+
+impl binrw::BinRead for NdBlendShapeData {
+    type Args<'a> = ModelReadContext<'a>;
+
+    fn read_options<R: std::io::Read + Seek>(
+        reader: &mut R,
+        _: binrw::Endian,
+        mrc: Self::Args<'_>,
+    ) -> binrw::BinResult<Self> {
+        // TODO: Read morph target names
+        let nd_ptr: u32 = reader.read_le()?;
+        let num_shapes: u32 = reader.read_le()?;
+
+        let nd_ptrs = {
+            let mut v = Vec::<u32>::with_capacity(num_shapes as usize);
+            for _ in 0..num_shapes {
+                v.push(reader.read_le()?);
+            }
+            v
+        };
+
+        let nodes = (0..num_shapes).map(|_|{
+            reader.read_le_args((mrc,))
+        }).collect::<Result<Vec<Nd>, binrw::Error>>()?;
+
+
+        Ok(Self { nodes })
+    }
+}
+
+impl binrw::BinWrite for NdBlendShapeData {
+    type Args<'a> = ModelWriteContext;
+
+    fn write_options<W: std::io::Write + Seek>(
+        &self,
+        writer: &mut W,
+        _: binrw::Endian,
+        mwc: Self::Args<'_>,
+    ) -> binrw::BinResult<()> {
+        Ok(())
+        // todo!()
+    }
+}
 
 #[path = "./nd_tests.rs"]
 #[cfg(test)]
