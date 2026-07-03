@@ -385,6 +385,13 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
         let mut inverse_bind_bytes = Vec::with_capacity(self.bones.len() * (4 * 16));
         let mut inverse_bind_cur = std::io::Cursor::new(&mut inverse_bind_bytes);
 
+        let bone_names = ctx.properties.iter()
+            .skip_while(|(k, v)| *k != "BASE")
+            .take(self.bones.len())
+            .map(|(k, v)| k)
+            .collect::<Vec<_>>();
+
+
         for (i, bone) in self.bones.iter().enumerate() {
             // If bone doesn't match expected index
             if bone.id as usize != i {
@@ -397,12 +404,14 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
                 return Err("parent bone doesn't exist".into());
             }
 
-            let name = if i == 0 {
-                "BASE".to_owned()
-            } else {
-                // TODO: Put name on bone
-                format!("bone{i}")
-            };
+            let name = bone_names.get(i).map(|v| String::from(*v)).unwrap_or_else(|| {
+                if i == 0 {
+                    "BASE".to_owned()
+                } else {
+                    // TODO: Put name on bone
+                    format!("bone{i}")
+                }
+            });
 
             let mut bone_node = gltf_writer::Node::new(Some(name));
             bone_node.set_transform(Some(gltf_writer::NodeTransform::TRS(
