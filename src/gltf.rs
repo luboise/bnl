@@ -1,4 +1,4 @@
-use binrw::{BinWrite, BinWriterExt};
+use binrw::{BinWriterExt};
 use gltf_writer::GltfIndex;
 use image::EncodableLayout;
 
@@ -126,7 +126,7 @@ impl TryFrom<Model> for gltf_writer::Gltf {
         };
 
         for nd in model_subresource.nodes {
-            let Some(new_index) = insert_into_gltf_heirarchy(&nd, &mut ctx)? else {
+            let Some(new_index) = nd.create_gltf_node(&mut ctx)? else {
                 return Err("Failed to add node into gltf heirarchy".into());
             };
 
@@ -230,64 +230,6 @@ impl NdGltfContext {
     }
 }
 
-pub fn insert_into_gltf_heirarchy(
-    nd: &Nd,
-    ctx: &mut NdGltfContext,
-) -> Result<Option<GltfIndex>, crate::Error> {
-    let node_index_opt = nd.create_gltf_node(ctx)?;
-
-    if nd.nd_type() == crate::asset::model::nd::NdType::ShaderParam2
-        && ctx.current_material.is_none()
-    {
-        eprintln!(
-            "unable to add ndShaderParam2 {} with no material set. skipping this subtree.",
-            nd.name
-                .as_ref()
-                .map(|name| format!("({name})"))
-                .unwrap_or_default()
-        );
-
-        return Ok(node_index_opt);
-    }
-
-    if nd.nd_type() == crate::asset::model::nd::NdType::BlendShape {
-        return Ok(None)
-    }
-
-    let type_string = nd.nd_type().to_string();
-
-    let indentation = String::from_utf8(vec![b' '; 4 * ctx.node_stack.len()]).unwrap();
-
-    // Push node, then handle child, then unpush node
-    if let Some(node_index) = &node_index_opt {
-        ctx.push_node(*node_index);
-
-        println!(
-            "{}Pushing {} {}, onto stack.",
-            &indentation, type_string, node_index
-        );
-    }
-
-    if let Some(child) = &nd.first_child {
-        insert_into_gltf_heirarchy(child, ctx)?;
-    }
-
-    if let Some(node_index) = node_index_opt {
-        ctx.pop_node();
-
-        println!(
-            "{}Removing {} {} from stack.",
-            indentation, type_string, node_index
-        );
-    }
-
-    if let Some(next_sibling) = &nd.next_sibling {
-        insert_into_gltf_heirarchy(next_sibling, ctx)?;
-    }
-
-    Ok(node_index_opt)
-}
-
 // TODO: Clean these up into one trait maybe?
 pub trait NdNode {
     fn add_gltf_node(
@@ -303,38 +245,96 @@ pub trait NdGltfAdd {
 
 impl NdGltfAdd for Nd {
     fn create_gltf_node(&self, ctx: &mut NdGltfContext) -> Result<Option<GltfIndex>, crate::Error> {
-        ctx.current_node_name = self.name.clone();
+        let new_index_opt = {
+            ctx.current_node_name = self.name.clone();
 
-        let new_index = match self.data.as_ref() {
-            NdData::Skeleton(data) => data.create_gltf_node(ctx),
-            NdData::VertexBuffer(data) => data.create_gltf_node(ctx),
-            NdData::PushBuffer(data) => data.create_gltf_node(ctx),
-            NdData::BGPushBuffer(_data) => todo!(),
-            NdData::ShaderParam2(data) => data.create_gltf_node(ctx).inspect_err(|e| {
-                eprintln!(
-                    "failed to add material from ndShaderParam2 {}. unsetting current material: {e}",
-                    self.name
-                        .as_ref()
-                        .map(|name| format!("({name})"))
-                        .unwrap_or_default()
-                );
+            let new_index = match &*self.data {
+                NdData::Skeleton(data) => data.create_gltf_node(ctx),
+                NdData::VertexBuffer(data) => data.create_gltf_node(ctx),
+                NdData::PushBuffer(data) => data.create_gltf_node(ctx),
+                NdData::BGPushBuffer(_data) => todo!(),
+                NdData::ShaderParam2(data) => data.create_gltf_node(ctx).inspect_err(|e| {
+                    eprintln!(
+                        "failed to add material from ndShaderParam2 {}. unsetting current material: {e}",
+                        self.name
+                            .as_ref()
+                            .map(|name| format!("({name})"))
+                            .unwrap_or_default()
+                    );
 
-                ctx.current_material = None;
-            }),
-            NdData::Shader2(_)
-            | NdData::VertexShader(_)
-            | NdData::MtxArray(_)
-            | NdData::BlendShape(_) 
-            | NdData::RigidSkin(_) => Ok(None),
-        }?;
+                    ctx.current_material = None;
+                }),
+                NdData::Shader2(_)
+                | NdData::VertexShader(_)
+                | NdData::MtxArray(_)
+                | NdData::BlendShape(_) 
+                | NdData::RigidSkin(_) => Ok(None),
+            }?;
 
-        if let Some(name) = &self.name
-            && let Some(index) = new_index
+            if let Some(name) = &self.name
+                && let Some(index) = new_index
+            {
+                let old_name = &mut ctx.gltf.nodes_mut().get_mut(index as usize).unwrap().name; 
+                if let Some(old_name) = old_name.replace(name.clone()) {
+                    println!("renaming {old_name} ({}) to {}", self.nd_type, name);
+                }
+            }
+
+            new_index
+        };
+
+        // Exit early on bad material
+        if self.nd_type() == crate::asset::model::nd::NdType::ShaderParam2
+            && ctx.current_material.is_none()
         {
-            ctx.gltf.nodes_mut().get_mut(index as usize).unwrap().name = Some(name.clone())
+            eprintln!(
+                "unable to add ndShaderParam2 {} with no material set. skipping this subtree.",
+                self.name
+                    .as_ref()
+                    .map(|name| format!("({name})"))
+                    .unwrap_or_default()
+            );
+
+            return Ok(new_index_opt);
         }
 
-        Ok(new_index)
+        if self.nd_type() == crate::asset::model::nd::NdType::BlendShape {
+            return Ok(None)
+        }
+
+        let type_string = self.nd_type().to_string();
+
+        let indentation = String::from_utf8(vec![b' '; 4 * ctx.node_stack.len()]).unwrap();
+
+        // Push node, then handle child, then unpush node
+        if let Some(node_index) = &new_index_opt {
+            ctx.push_node(*node_index);
+
+            println!(
+                "{}Pushing {} {}, onto stack.",
+                &indentation, type_string, node_index
+            );
+        }
+
+        if let Some(child) = &self.first_child {
+            child.create_gltf_node(ctx)?;
+        }
+
+        if let Some(node_index) = new_index_opt {
+            ctx.pop_node();
+
+            println!(
+                "{}Removing {} {} from stack.",
+                indentation, type_string, node_index
+            );
+        }
+
+        if let Some(next_sibling) = &self.next_sibling {
+            next_sibling.create_gltf_node(ctx)?;
+        }
+
+        Ok(new_index_opt)
+
     }
 }
 
@@ -344,9 +344,26 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
             return Err("no skin during pass".into());
         }
 
+        let mut ret_index = None;
+
+        // if we are at the root, create a new thing to parent the skeleton under and add it 
+        // (need the mesh NEXT to the skeleton, not under it)
+        if ctx.node_stack.is_empty() {
+            let root = ctx.gltf.add_node(gltf_writer::Node::new(Some("Root".to_owned())));
+            ret_index = Some(root);
+        }
+
         let skeleton_index = ctx
             .gltf
             .add_node(gltf_writer::Node::new(Some("ndSkeleton".to_owned())));
+
+        let ret_index = match ret_index {
+            Some(root) => {
+                ctx.gltf.node_mut(root).ok_or("no node")?.add_child(skeleton_index);
+                root
+            }
+            None => skeleton_index
+        };
 
         // TODO: Get this bone name from the properties instead?
         let root_bone_index = {
@@ -445,12 +462,11 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
 
         new_skin.inverse_bind_matrices = Some(ibm_accessor);
 
-
         let new_skin_index = ctx.gltf.add_skin(new_skin);
 
         ctx.current_skin = Some(new_skin_index);
 
-        Ok(Some(skeleton_index))
+        Ok(Some(ret_index))
     }
 }
 
