@@ -32,13 +32,26 @@ impl Serialize for Nd {
     {
         let mut map = serializer.serialize_map(None)?;
 
+        if let Some(name) = &self.name {
+            map.serialize_entry("name", name)?;
+        }
+
         map.serialize_entry("type", &self.nd_type().to_string())?;
+        map.serialize_entry("data", self.data.as_ref())?;
 
         let children: Vec<&Nd> = self.children().collect();
         map.serialize_entry("children", &children)?;
 
         map.end()
     }
+}
+
+fn serialize_nullstring<S: serde::Serializer>(str: &binrw::NullString, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(str::from_utf8(&str.0).unwrap_or("failed to parse nullstring"))
+}
+
+fn serialize_vec_len<T, S: serde::Serializer>(v: &[T], s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_u32(v.len() as u32)
 }
 
 #[binrw::binread]
@@ -283,7 +296,7 @@ pub enum NdType {
     BlendShape = 0x17,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[binrw::binread]
 #[br(import(mrc: ModelReadContext<'_>, nd_type: NdType))]
 #[bw(import(mwc: ModelWriteContext))]
@@ -514,7 +527,8 @@ impl<'a> ModelSlice<'a> {
 
 #[binrw::binrw]
 #[bw(stream = w)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct NdSkeletonData {
     #[br(temp)]
     #[bw(try_calc = bones.len().try_into())]
@@ -526,6 +540,8 @@ pub struct NdSkeletonData {
     #[brw(magic = b"ndSkeleton\x00\x00")]
     _name: (),
     #[br(count = num_bones)]
+    #[serde(rename = "numBones")]
+    #[serde(serialize_with = "serialize_vec_len")]
     pub bones: Vec<Bone>,
 }
 
@@ -549,7 +565,7 @@ pub struct Bone {
 }
 
 #[binrw::binrw]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 struct NdMtxArrayEntry {
     index: u16,
     idk1: u16,
@@ -559,7 +575,7 @@ struct NdMtxArrayEntry {
 }
 
 #[binrw::binrw]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(stream = r)]
 #[bw(stream = w)]
 pub struct NdMtxArrayData {
@@ -624,7 +640,7 @@ fn parse_rigid_indices() -> binrw::BinResult<Vec<u8>> {
     Ok(indices)
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 #[binrw::binread]
 #[expect(clippy::manual_non_exhaustive)]
 pub struct NdRigidSkinIdxData {
@@ -655,7 +671,7 @@ impl binrw::BinWrite for NdRigidSkinIdxData {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct NdBlendShapeData {
      // #[br(temp)]   nd_ptr: u32,
      // #[br(temp)]   num_shapes: u32,

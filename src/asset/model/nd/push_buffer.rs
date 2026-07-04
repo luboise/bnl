@@ -8,6 +8,7 @@ use crate::{asset::model::nd::br_error, d3d::D3DPrimitiveType};
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct DrawCall {
     pub prim_type: D3DPrimitiveType,
+    #[serde(serialize_with = "super::serialize_vec_len")]
     pub indices: Vec<u16>,
 }
 

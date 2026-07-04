@@ -1,8 +1,9 @@
 use std::io::{Read, Seek, SeekFrom};
 
 use binrw::{BinReaderExt, BinWriterExt};
+use serde::ser::SerializeMap;
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone)]
 pub struct VertexBufferResourceView {
     pub view_type: VertexBufferViewType,
     pub unknown_u16: u16,
@@ -15,6 +16,44 @@ pub struct VertexBufferResourceView {
 
     pub resource_start: u32,
     pub resource: Vec<f32>,
+}
+
+impl serde::Serialize for VertexBufferResourceView {
+    fn serialize<S>(&self, s: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut map = s.serialize_map(None)?;
+
+        let Self {
+            view_type,
+            unknown_u16,
+            unknown_u32_1,
+            unknown_u32_2,
+            unknown_u32_3,
+            resource_start,
+            resource,
+        } = self;
+
+        macro_rules! serialize_val {
+            ($val:ident) => {
+                map.serialize_entry(stringify!($val), $val)?
+            };
+        }
+
+        serialize_val!(view_type);
+        if !resource.is_empty() {
+            serialize_val!(unknown_u16);
+            serialize_val!(unknown_u32_1);
+            serialize_val!(unknown_u32_2);
+            serialize_val!(unknown_u32_3);
+            serialize_val!(resource_start);
+        }
+
+        map.serialize_entry("resource", &format!("{} bytes", resource.len() * 4))?;
+
+        map.end()
+    }
 }
 
 impl binrw::BinRead for VertexBufferResourceView {
@@ -56,7 +95,7 @@ impl binrw::BinRead for VertexBufferResourceView {
         let resource = resource
             .as_chunks()
             .0
-            .into_iter()
+            .iter()
             .copied()
             .map(f32::from_le_bytes)
             .collect();

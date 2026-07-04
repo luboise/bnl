@@ -8,7 +8,7 @@ use crate::asset::model::nd::{br_error, br_get_stream_pos};
 #[binrw::binrw]
 #[bw(stream = w)]
 #[br(stream = r)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct NdShaderParam2Data {
     #[br(temp)]
     #[bw(try_calc = u32::try_from(8 + w.stream_position().unwrap()))]
@@ -30,16 +30,9 @@ impl NdShaderParam2Data {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(transparent)]
 pub struct MaybeIndex(pub Option<u32>);
-
-impl serde::Serialize for MaybeIndex {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer {
-        serializer.serialize_u32((*self).into())
-    }
-}
 
 impl From<u32> for MaybeIndex {
     fn from(value: u32) -> Self {
@@ -84,13 +77,14 @@ impl binrw::BinWrite for MaybeIndex {
 }
 
 #[binrw::binread]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[br(import(num_assignments: u32))]
 pub struct ParamAssignment {
     #[br(temp)]
     name_ptr: u32,
     #[br(seek_before = SeekFrom::Start(name_ptr.into()),
         restore_position)]
+    #[serde(serialize_with = "super::serialize_nullstring")]
     pub name: binrw::NullString,
 
     // 0x4
@@ -111,7 +105,7 @@ impl ParamAssignment {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct ParamAssignments {
     pub assignments: Vec<ParamAssignment>
 }
@@ -205,8 +199,9 @@ impl binrw::BinWrite for ParamAssignments {
 
 
 #[binrw::binrw]
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub struct PixelShaderMatrix {
+    #[serde(skip)]
     matrix: [[f32; 4]; 4],
     val1: u32,
     val2: u32,
@@ -214,7 +209,7 @@ pub struct PixelShaderMatrix {
 
 #[binrw::binrw]
 #[bw(stream = w)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PixelShaderParams {
     #[br(temp)]
     #[bw(try_calc = if pixel_shader_constants.is_empty() {Ok(0)} else {

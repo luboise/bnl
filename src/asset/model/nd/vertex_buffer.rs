@@ -47,7 +47,8 @@ pub fn get_vertex_positions(
 #[binrw::binrw]
 #[br(import(mrc: super::ModelReadContext<'_> ))]
 #[bw(import(mwc: super::ModelWriteContext ))]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 #[bw(stream=w)]
 pub struct NdVertexBufferData {
     #[br(temp)]

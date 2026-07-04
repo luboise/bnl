@@ -1,12 +1,13 @@
 use std::io::SeekFrom;
 
 #[binrw::binrw]
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub struct VertexShader {
     idk1: u16,
     num_dwords: u16,
 
     #[br(count = 4 * num_dwords * 4)]
+    #[serde(skip)]
     data: Vec<u8>,
 }
 
@@ -33,12 +34,13 @@ impl std::fmt::Debug for VertexShader {
 #[binrw::binrw]
 #[br(little)]
 #[bw(little)]
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize)]
 pub struct OtherStream {
     #[br(
         assert(!stream.is_empty() && *stream.last().unwrap() == 0xffffffff),
         parse_with = binrw::helpers::until(|byte| *byte == 0xffffffff),
     )]
+    #[serde(rename = "streamLen", serialize_with = "super::serialize_vec_len")]
     stream: Vec<u32>,
 }
 
@@ -61,7 +63,7 @@ impl std::fmt::Debug for OtherStream {
 
 #[binrw::binrw]
 #[bw(stream = w)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 #[expect(clippy::manual_non_exhaustive)]
 pub struct NdVertexShaderData {
     #[br(temp)]
@@ -121,7 +123,8 @@ pub struct NdVertexShaderData {
 
 #[binrw::binrw]
 #[bw(stream = w)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PixelShader {
     pixel_shader_type: u32, // used at runtime, expect 0?
     #[br(assert(shader_ptr != 0))]
@@ -132,6 +135,7 @@ pub struct PixelShader {
     shader_handle: u32, // used at runtime for handle
     some_u32: u32,      // possibly padding?
     #[br(count = length)]
+    #[serde(rename = "shaderLen", serialize_with = "super::serialize_vec_len")]
     shader: Vec<u8>,
 }
 
@@ -143,7 +147,7 @@ impl PixelShader {
 
 #[binrw::binrw]
 #[bw(stream = w)]
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct NdShader2Data {
     #[br(temp)]
     #[bw(try_calc = u32::try_from(w.stream_position().unwrap()).map(|v| v + 8))]
