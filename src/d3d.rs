@@ -347,3 +347,131 @@ impl From<u32> for D3DPrimitiveType {
         }
     }
 }
+
+/* TODO: Implement D3D Vertex Declaration Parsing and move it to another crate
+pub enum VertexDimensionality {}
+pub enum VertexDataType {}
+
+pub enum VertexStreamDataDefinition {
+    LoadRegister {
+        dimensionality: VertexDimensionality,
+        data_type: VertexDataType,
+        register: u8, // u4
+    },
+    SkipDwords(u8), // u4
+    SkipBytes(u8),  // u4
+}
+
+pub enum VertexInputAssembly {
+    NOP,
+    StreamSelector {
+        tesselator: bool,
+        // u4
+        stream: u8,
+    },
+    StreamDataDefinition(VertexStreamDataDefinition),
+    MemoryFromTessellator,
+    ConstantShaderMemory,
+    Extension,
+    Reserved,
+    EndOfArray,
+}
+
+pub struct VertexDeclaration {
+    pub inputs: Vec<VertexInputAssembly>,
+}
+
+impl VertexDeclaration {
+    pub fn new(dwords: &[u32]) -> Result<Self, crate::Error> {
+        let mut inputs = vec![];
+
+        let mut dwords = dwords.iter().copied();
+
+        while let Some(dword) = dwords.next() {
+            let token_type = dword.wrapping_shr(29) & 0b111;
+
+            match token_type {
+                0 => {
+                    if dword != 0x00000000 {
+                        return Err(format!(
+                            "TokenType is 0 (NOP), but entire DWORD is not 0 (found {dword})"
+                        )
+                        .into());
+                    }
+
+                    inputs.push(VertexInputAssembly::NOP);
+                }
+                1 => {
+                    if dword & 0b00001111_11111111_11111111_11110000 != 0 {
+                        return Err(format!(
+                            "StreamSelector should have zeroes from [27:04] (found {dword:b})"
+                        )
+                        .into());
+                    }
+
+                    let tesselator = (dword & (1 << 27)) > 0;
+
+                    inputs.push(VertexInputAssembly::StreamSelector {
+                        tesselator,
+                        stream: (dword as u8 & 0b111),
+                    })
+                }
+                2 => {
+                    let skip = dword & (1 << 28) > 0;
+
+                    let val = if skip {
+                        let num_skipped = (dword.wrapping_shr(16) as u8) & 0b11111;
+
+                        VertexInputAssembly::StreamDataDefinition(
+                            // skip bytes
+                            if dword & (1 << 27) > 0 {
+                                VertexStreamDataDefinition::SkipBytes(num_skipped)
+                            } else {
+                                VertexStreamDataDefinition::SkipDwords(num_skipped)
+                            },
+                        )
+                    } else {
+                        let dimensionality = (dword.wrapping_shr(16) as u8) & 0b1111;
+                        let data_type = (dword.wrapping_shr(20) as u8) & 0b1111;
+                        let register = (dword as u8) & 0b1111;
+
+                        VertexInputAssembly::StreamDataDefinition(
+                            VertexStreamDataDefinition::LoadRegister {
+                                dimensionality,
+                                data_type,
+                                register,
+                            },
+                        )
+                    };
+
+                    inputs.push(val);
+                }
+                3 => {
+                    todo!()
+                }
+                4 => {
+                    todo!()
+                }
+                5 => {
+                    todo!()
+                }
+                6 => {
+                    todo!()
+                }
+                7 => {
+                    if dword != 0xffffffff {
+                        return Err(format!(
+                        "TokenType is 7 (EndOfArray), but entire DWORD is not 0xffffffff (found {dword})"
+                    )
+                    .into());
+                    }
+                    inputs.push(VertexInputAssembly::EndOfArray)
+                }
+                8.. => unreachable!(),
+            }
+        }
+
+        Ok(Self { inputs })
+    }
+}
+*/
