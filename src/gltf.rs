@@ -1,4 +1,4 @@
-use binrw::{BinWriterExt};
+use binrw::BinWriterExt;
 use gltf_writer::GltfIndex;
 use image::EncodableLayout;
 
@@ -164,6 +164,10 @@ pub struct NdGltfContext {
     pub(crate) current_scene: GltfIndex,
 
     pub(crate) node_stack: Vec<GltfIndex>,
+
+    pub(crate) mtx_array: Option<Vec<u16>>,
+    pub(crate) rigid_skin: Option<Vec<u16>>,
+    pub(crate) rigid_skin_raw: Option<Vec<u16>>,
 }
 
 impl NdGltfContext {
@@ -218,9 +222,9 @@ impl NdGltfContext {
             | VertexBufferViewType::Unknown0x1b
             | VertexBufferViewType::Unknown0x1c
             | VertexBufferViewType::Unknown0x1d
-            | VertexBufferViewType::Unknown0x1e 
+            | VertexBufferViewType::Unknown0x1e
             | VertexBufferViewType::Unknown0x1f
-            | VertexBufferViewType::Unknown0x20 
+            | VertexBufferViewType::Unknown0x20
             | VertexBufferViewType::Unknown0x21
             | VertexBufferViewType::Unknown0x22
             | VertexBufferViewType::KnknownFF => {
@@ -264,17 +268,38 @@ impl NdGltfAdd for Nd {
 
                     ctx.current_material = None;
                 }),
+                NdData::MtxArray(data) => {
+                    ctx.mtx_array = Some(
+                        data.entries.iter().map(|entry|entry.bone_i).collect()
+                    );
+                    Ok(None)
+                }
+                NdData::RigidSkin(data) => {
+                    let Some(mtx_array) = &mut ctx.mtx_array else {
+                        return Err("ndRigidSkinIdx with no ndMtxArray ancestor".into());
+                    };
+
+                    ctx.rigid_skin_raw = Some(data.indices.iter().map(|v| u16::from(*v)).collect());
+
+                    let rigid_skin = data.indices.iter().map(|rigid_idx|
+                        mtx_array.get((*rigid_idx) as usize).copied().ok_or_else(|| 
+                            format!("ndRigidSkinIdx references mtx {rigid_idx} (mtx only has {})", mtx_array.len())
+                        )).collect::<Result<Vec<_>, _>>()?;
+
+                    ctx.rigid_skin = Some(rigid_skin);
+
+                    Ok(None)
+                }
                 NdData::Shader2(_)
                 | NdData::VertexShader(_)
-                | NdData::MtxArray(_)
                 | NdData::BlendShape(_) 
-                | NdData::RigidSkin(_) => Ok(None),
+                 => Ok(None),
             }?;
 
             if let Some(name) = &self.name
                 && let Some(index) = new_index
             {
-                let old_name = &mut ctx.gltf.nodes_mut().get_mut(index as usize).unwrap().name; 
+                let old_name = &mut ctx.gltf.nodes_mut().get_mut(index as usize).unwrap().name;
                 if let Some(old_name) = old_name.replace(name.clone()) {
                     println!("renaming {old_name} ({}) to {}", self.nd_type, name);
                 }
@@ -299,7 +324,7 @@ impl NdGltfAdd for Nd {
         }
 
         if self.nd_type() == crate::asset::model::nd::NdType::BlendShape {
-            return Ok(None)
+            return Ok(None);
         }
 
         let type_string = self.nd_type().to_string();
@@ -333,8 +358,9 @@ impl NdGltfAdd for Nd {
             next_sibling.create_gltf_node(ctx)?;
         }
 
-        Ok(new_index_opt)
+        // TODO: Unset rigid skin/mtx array when exiting those nodes
 
+        Ok(new_index_opt)
     }
 }
 
@@ -346,10 +372,12 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
 
         let mut ret_index = None;
 
-        // if we are at the root, create a new thing to parent the skeleton under and add it 
+        // if we are at the root, create a new thing to parent the skeleton under and add it
         // (need the mesh NEXT to the skeleton, not under it)
         if ctx.node_stack.is_empty() {
-            let root = ctx.gltf.add_node(gltf_writer::Node::new(Some("Root".to_owned())));
+            let root = ctx
+                .gltf
+                .add_node(gltf_writer::Node::new(Some("Root".to_owned())));
             ret_index = Some(root);
         }
 
@@ -359,10 +387,13 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
 
         let ret_index = match ret_index {
             Some(root) => {
-                ctx.gltf.node_mut(root).ok_or("no node")?.add_child(skeleton_index);
+                ctx.gltf
+                    .node_mut(root)
+                    .ok_or("no node")?
+                    .add_child(skeleton_index);
                 root
             }
-            None => skeleton_index
+            None => skeleton_index,
         };
 
         // TODO: Get this bone name from the properties instead?
@@ -385,12 +416,13 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
         let mut inverse_bind_bytes = Vec::with_capacity(self.bones.len() * (4 * 16));
         let mut inverse_bind_cur = std::io::Cursor::new(&mut inverse_bind_bytes);
 
-        let bone_names = ctx.properties.iter()
+        let bone_names = ctx
+            .properties
+            .iter()
             .skip_while(|(k, v)| *k != "BASE")
             .take(self.bones.len())
             .map(|(k, v)| k)
             .collect::<Vec<_>>();
-
 
         for (i, bone) in self.bones.iter().enumerate() {
             // If bone doesn't match expected index
@@ -404,14 +436,17 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
                 return Err("parent bone doesn't exist".into());
             }
 
-            let name = bone_names.get(i).map(|v| String::from(*v)).unwrap_or_else(|| {
-                if i == 0 {
-                    "BASE".to_owned()
-                } else {
-                    // TODO: Put name on bone
-                    format!("bone{i}")
-                }
-            });
+            let name = bone_names
+                .get(i)
+                .map(|v| String::from(*v))
+                .unwrap_or_else(|| {
+                    if i == 0 {
+                        "BASE".to_owned()
+                    } else {
+                        // TODO: Put name on bone
+                        format!("bone{i}")
+                    }
+                });
 
             let mut bone_node = gltf_writer::Node::new(Some(name));
             bone_node.set_transform(Some(gltf_writer::NodeTransform::TRS(
@@ -456,18 +491,26 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
 
         assert_eq!(inverse_bind_bytes.len(), inverse_bind_bytes.capacity());
 
-        let buffer_index = ctx.gltf.add_buffer(gltf_writer::Buffer::new(&inverse_bind_bytes));
-        let bvi = ctx.gltf.add_buffer_view(gltf_writer::BufferView{
+        let buffer_index = ctx
+            .gltf
+            .add_buffer(gltf_writer::Buffer::new(&inverse_bind_bytes));
+        let bvi = ctx.gltf.add_buffer_view(gltf_writer::BufferView {
             buffer_index,
-            byte_offset: 0, 
+            byte_offset: 0,
             byte_length: inverse_bind_bytes.len(),
             byte_stride: None,
-            target: None
-         });
+            target: None,
+        });
 
         // TODO: Assert num inverse binds == num bones
-        
-        let ibm_accessor = ctx.gltf.add_accessor(gltf_writer::Accessor::new(bvi, 0, gltf_writer::AccessorDataType::F32, inverse_bind_bytes.len() / (4 * 16), gltf_writer::AccessorComponentCount::MAT4));
+
+        let ibm_accessor = ctx.gltf.add_accessor(gltf_writer::Accessor::new(
+            bvi,
+            0,
+            gltf_writer::AccessorDataType::F32,
+            inverse_bind_bytes.len() / (4 * 16),
+            gltf_writer::AccessorComponentCount::MAT4,
+        ));
 
         new_skin.inverse_bind_matrices = Some(ibm_accessor);
 
@@ -721,14 +764,14 @@ impl NdGltfAdd for crate::asset::model::nd::NdVertexBufferData {
                         | VertexBufferViewType::Unknown14
                         | VertexBufferViewType::Unknown15
                         | VertexBufferViewType::Unknown16
-                        | VertexBufferViewType::Unknown0x1b   
-                        | VertexBufferViewType::Unknown0x1c   
-                        | VertexBufferViewType::Unknown0x1d   
-                        | VertexBufferViewType::Unknown0x1e   
-                        | VertexBufferViewType::Unknown0x1f   
-                        | VertexBufferViewType::Unknown0x20   
-                        | VertexBufferViewType::Unknown0x21   
-                        | VertexBufferViewType::Unknown0x22   
+                        | VertexBufferViewType::Unknown0x1b
+                        | VertexBufferViewType::Unknown0x1c
+                        | VertexBufferViewType::Unknown0x1d
+                        | VertexBufferViewType::Unknown0x1e
+                        | VertexBufferViewType::Unknown0x1f
+                        | VertexBufferViewType::Unknown0x20
+                        | VertexBufferViewType::Unknown0x21
+                        | VertexBufferViewType::Unknown0x22
                         | VertexBufferViewType::KnknownFF => {
                             unreachable!()
                         }
@@ -832,7 +875,7 @@ impl NdGltfAdd for crate::asset::model::nd::NdVertexBufferData {
                 | VertexBufferViewType::Unknown14
                 | VertexBufferViewType::Unknown15
                 | VertexBufferViewType::Unknown16
-                | VertexBufferViewType::Unknown0x1b 
+                | VertexBufferViewType::Unknown0x1b
                 | VertexBufferViewType::Unknown0x1c
                 | VertexBufferViewType::Unknown0x1d
                 | VertexBufferViewType::Unknown0x1e

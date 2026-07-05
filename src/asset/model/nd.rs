@@ -566,12 +566,12 @@ pub struct Bone {
 
 #[binrw::binrw]
 #[derive(Debug, Clone, serde::Serialize)]
-struct NdMtxArrayEntry {
-    index: u16,
-    idk1: u16,
-    idk2: u8,
-    flags: u8,
-    idk3: u16,
+pub struct NdMtxArrayEntry {
+    pub bone_i: u16,
+    pub parent_bone_i: u16,
+    pub idk2: u8,
+    pub flags: u8,
+    pub idk3: u16,
 }
 
 #[binrw::binrw]
@@ -588,17 +588,17 @@ pub struct NdMtxArrayData {
     #[br(temp)]
     #[bw(try_calc = entries.len().try_into())]
     num_entries: u32,
-    count2: u16,
-    calc1: u16, // calculated at runtime
-    some_float: f32,
-    some_u32: u32,
+    pub count2: u16,
+    pub calc1: u16, // calculated at runtime
+    pub some_float: f32,
+    pub some_u32: u32,
 
     // Fake fields
     #[br(if(num_entries > 0 && entries_ptr > 0),
         count = num_entries,
         seek_before = SeekFrom::Start(entries_ptr.into())
         )]
-    entries: Vec<NdMtxArrayEntry>,
+    pub entries: Vec<NdMtxArrayEntry>,
     #[brw(magic = b"ndMtxArray\x00\x00")]
     _magic: (),
 }
