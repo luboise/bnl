@@ -1,4 +1,3 @@
-use gltf_writer::gltf::{self};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use serde::Serialize;
 
@@ -299,7 +298,7 @@ impl From<D3DPrimitiveType> for u32 {
     }
 }
 
-impl TryFrom<D3DPrimitiveType> for gltf::TopologyMode {
+impl TryFrom<D3DPrimitiveType> for gltf_writer::TopologyMode {
     type Error = String;
 
     fn try_from(value: D3DPrimitiveType) -> Result<Self, String> {
