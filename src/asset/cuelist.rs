@@ -7,8 +7,8 @@ pub struct CueList {
 
 #[derive(Debug, Clone)]
 pub struct CueGroup {
-    name: String,
-    cues: Vec<String>,
+    pub name: String,
+    pub cues: Vec<String>,
 }
 
 impl CueGroup {
@@ -36,6 +36,10 @@ impl CueList {
         self.groups
             .iter()
             .all(|group| !group.name.is_empty() && group.cues.iter().all(|cue| !cue.is_empty()))
+    }
+
+    pub fn groups(&self) -> &[CueGroup] {
+        &self.groups
     }
 }
 
