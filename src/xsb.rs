@@ -33,16 +33,7 @@ pub fn wav_files_from_path(path: PathBuf) -> Result<Vec<WavFile>, crate::Error> 
     let wav_files = wavebank
         .wav_entries
         .iter()
-        .map(|raw| {
-            Ok(WavFile::from_raw(
-                raw.clone(),
-                wavebank
-                    .wave_data
-                    .get(raw.bytes_ptr as usize..(raw.bytes_ptr + raw.num_bytes) as usize)
-                    .ok_or("bad wave slice")?
-                    .to_vec(),
-            ))
-        })
+        .map(|raw| WavFile::from_raw(raw.clone(), &wavebank.wave_data))
         .collect::<Result<Vec<_>, crate::Error>>()?;
 
     Ok(wav_files)
@@ -190,15 +181,15 @@ impl WaveBankMiniWaveFormat3 {
 #[binrw::binrw]
 #[br(little)]
 #[bw(little)]
-pub(crate) struct RawWavEntry {
-    unknown_1: u32,
+pub struct RawWavEntry {
+    pub unknown_1: u32,
 
-    raw_format: u32,
+    pub raw_format: u32,
 
-    bytes_ptr: u32,
-    num_bytes: u32,
-    unknown_2: u32,
-    unknown_3: u32,
+    pub bytes_ptr: u32,
+    pub num_bytes: u32,
+    pub unknown_2: u32,
+    pub unknown_3: u32,
 }
 
 #[derive(Default, Clone)]
@@ -214,15 +205,20 @@ pub struct WavFile {
 }
 
 impl WavFile {
-    pub(crate) fn from_raw(raw: RawWavEntry, bytes: Vec<u8>) -> Self {
-        Self {
+    pub fn from_raw(raw: RawWavEntry, bytes: &[u8]) -> Result<Self, crate::Error> {
+        let bytes = bytes
+            .get(raw.bytes_ptr as usize..(raw.bytes_ptr + raw.num_bytes) as usize)
+            .ok_or("bad slice")?
+            .to_vec();
+
+        Ok(Self {
             unknown_1: raw.unknown_1,
 
             format: WaveBankMiniWaveFormat3::new(raw.raw_format),
             bytes,
             unknown_2: raw.unknown_2,
             unknown_3: raw.unknown_3,
-        }
+        })
     }
 
     pub fn dump<P: AsRef<Path>>(&self, out_path: P) -> Result<(), io::Error> {
