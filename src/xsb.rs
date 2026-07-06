@@ -1,11 +1,10 @@
 use std::{
     fs,
-    io::{self, Cursor, Read, Seek, SeekFrom},
+    io::{self, Cursor, Read, SeekFrom},
     path::{Path, PathBuf},
 };
 
 use binrw::BinReaderExt;
-use byteorder::{LittleEndian, ReadBytesExt};
 use serde::Deserialize;
 
 pub fn dump_wav_files(wav_files: &[WavFile], dump_dir: PathBuf) -> Result<(), crate::Error> {
@@ -28,84 +27,64 @@ pub fn wav_files_from_path(path: PathBuf) -> Result<Vec<WavFile>, crate::Error> 
 
     let mut cur = Cursor::new(&bytes);
 
-    let mut wbnd_string = [0u8; 4];
-    cur.read_exact(&mut wbnd_string)?;
+    let wavebank: XWavebank = cur.read_le()?;
+    println!("Found {} entries.", wavebank.wav_entries.len());
 
-    println!("Reading XWavebank header.");
-
-    let header = XWavebankHeader {
-        wbnd_string,
-        unknown_count_1: cur.read_u32::<LittleEndian>()?,
-        header_size: cur.read_u32::<LittleEndian>()?,
-        wavebanks_ptr: cur.read_u32::<LittleEndian>()?,
-        wav_entries_ptr: cur.read_u32::<LittleEndian>()?,
-        wav_entries_size: cur.read_u32::<LittleEndian>()?,
-        unknown_count_2: cur.read_u32::<LittleEndian>()?,
-        unknown_1: cur.read_u32::<LittleEndian>()?,
-        wave_data_ptr: cur.read_u32::<LittleEndian>()?,
-        wave_data_length: cur.read_u32::<LittleEndian>()?,
-    };
-
-    let num_wav_entries = header.wav_entries_size / (6 * 4);
-    println!("Found {} entries.", num_wav_entries);
-
-    let mut wav_files: Vec<WavFile> = vec![];
-
-    let raw_wav_entries = if num_wav_entries == 0 {
-        Default::default()
-    } else {
-        cur.seek(SeekFrom::Start(header.wav_entries_ptr as u64))?;
-        (0..num_wav_entries as usize)
-            .map(|_| Ok(cur.read_le()?))
-            .collect::<Result<Vec<RawWavEntry>, crate::Error>>()?
-    };
-
-    wav_files.resize(raw_wav_entries.len(), Default::default());
-
-    // Read wav data
-    let mut res_cursor = cur.clone();
-
-    println!("Reading wav files.");
-    for (i, raw_entry) in raw_wav_entries.into_iter().enumerate() {
-        let mut audio_bytes = vec![0u8; raw_entry.num_bytes as usize];
-
-        res_cursor.seek(SeekFrom::Start(
-            (raw_entry.bytes_ptr + header.wave_data_ptr) as u64,
-        ))?;
-
-        res_cursor.read_exact(&mut audio_bytes)?;
-
-        wav_files[i] = WavFile::from_raw(raw_entry, audio_bytes);
-    }
+    let wav_files = wavebank
+        .wav_entries
+        .iter()
+        .map(|raw| {
+            Ok(WavFile::from_raw(
+                raw.clone(),
+                wavebank
+                    .wave_data
+                    .get(raw.bytes_ptr as usize..(raw.bytes_ptr + raw.num_bytes) as usize)
+                    .ok_or("bad wave slice")?
+                    .to_vec(),
+            ))
+        })
+        .collect::<Result<Vec<_>, crate::Error>>()?;
 
     Ok(wav_files)
 }
 
 const XWAVEBANK_HEADER_SIZE: usize = 40;
 
+#[binrw::binread]
 #[derive(Debug, Deserialize)]
-#[repr(C, packed)]
-pub(crate) struct XWavebankHeader {
-    /// String which just says "WBND" in ASCII
-    wbnd_string: [u8; 4],
+pub struct XWavebank {
+    #[brw(magic = b"WBND")]
+    _wbnd: (),
 
-    unknown_count_1: u32,
+    pub version: u32,
 
     header_size: u32, // Size of a WavebankHeader
     wavebanks_ptr: u32,
 
+    #[br(temp)]
     wav_entries_ptr: u32,
+    #[br(temp)]
     wav_entries_size: u32, // Total size of all the wav entries in bytes
+
+    #[br(restore_position,
+        seek_before = SeekFrom::Start(wav_entries_ptr.into()),
+        count = wav_entries_size / 24)]
+    pub wav_entries: Vec<RawWavEntry>,
 
     unknown_count_2: u32,
 
     unknown_1: u32,
 
+    #[br(temp)]
     wave_data_ptr: u32,
+    #[br(temp)]
     wave_data_length: u32,
+
+    #[br(restore_position, count = wave_data_length, seek_before = SeekFrom::Start(wave_data_ptr.into()))]
+    pub wave_data: Vec<u8>,
 }
 
-pub(crate) struct Wavebank {
+pub struct Wavebank {
     id: u32,
     num_entries: u32,
     name: [char; 16],
