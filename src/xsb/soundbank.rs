@@ -2,14 +2,6 @@ use std::io::SeekFrom;
 
 use binrw::BinReaderExt;
 
-struct CueU32 {
-    cue: u32,
-}
-
-struct CueTable {
-    idk: u32,
-}
-
 #[binrw::binrw]
 #[derive(Debug, Clone)]
 pub struct CueEntry {
@@ -101,27 +93,173 @@ pub struct SoundEntryData {
     eqQ: u16,
 }
 
-#[binrw::binrw]
+#[binrw::binread]
 #[derive(Debug, Clone)]
 pub struct TrivialSound {
+    pub bank_index: BankIndex, 
+    pub data: SoundEntryData,
+}
+
+#[binrw::binread]
+#[derive(Debug, Clone)]
+pub struct SimpleSound {
+    #[br(temp)]
+    variations_ptr: u32,
+    #[br(restore_position, seek_before = SeekFrom::Start(variations_ptr.into()))]
+    pub variations: SimpleWaveVariations,
+    pub data: SoundEntryData,
+}
+
+#[repr(u8)]
+pub enum PlayEventBits {
+    Complex = 0x04,
+    LoopVariation = 0x40,
+}
+
+#[binrw::binrw]
+#[brw(repr = u8)]
+#[repr(u8)]
+#[derive(num_enum::TryFromPrimitive)]
+#[derive(Debug, Clone)]
+pub enum ComplexEventType {
+    Play = 0,
+    PlayComplex = 1,
+}
+
+#[derive(Debug, Clone)]
+pub struct VariationParams {
+    pub flag1: bool,
+    pub flag2: bool,
+    pub current_variation: u16, // u13,
+    pub variation_selection_method: u8, // u4
+    pub num_variations: u16 // u13 
+}
+
+impl From<u32> for VariationParams {
+    fn from(value: u32) -> Self {
+        let flag1 = value & (1 << 31) > 0;
+        let flag2 = value & (1 << 30) > 0;
+
+        let current_variation = (value.unbounded_shr(17) as u16) & 0b1111111111111;
+        let variation_selection_method = (value.unbounded_shr(13) as u8) & 0b1111;
+        let num_variations  = (value as u16) & 0b1111111111111;
+
+        Self {
+            flag1,
+            flag2,
+            current_variation,
+            variation_selection_method,
+            num_variations
+        }
+    }
+}
+
+
+#[binrw::binread]
+#[derive(Debug, Clone)]
+pub struct SimpleWaveVariations {
+    #[br(map = |x: [u8; 4]| u32::from_le_bytes(x).into())]
+    pub variation_params: VariationParams, 
+    #[br(count = variation_params.num_variations)]
+    pub variations: Vec<BankIndex>
+}
+
+#[binrw::binread]
+#[derive(Debug, Clone)]
+pub struct ComplexWaveVariations {
+    #[br(map = |x: [u8; 4]| u32::from_le_bytes(x).into())]
+    pub variation_params: VariationParams, 
+    #[br(count = variation_params.num_variations)]
+    pub variations: Vec<ComplexVariation>
+}
+
+#[binrw::binread]
+#[derive(Debug, Clone)]
+pub struct BankIndex {
     /// Index of sound in referenced wavebank
     pub wave_index: u16,
     /// Index of referenced wavebank in XSoundbank::wavebank_entries
     pub wavebank_index: u16,
-    pub data: SoundEntryData,
 }
 
-#[binrw::binrw]
+
+#[binrw::binread]
 #[derive(Debug, Clone)]
-pub struct SimpleSound {
-    pub ptr: u32,
-    pub data: SoundEntryData,
+pub struct ComplexVariation {
+    pub bank_index: BankIndex,
+    pub weight_min: u16,
+    pub weight_max: u16,
 }
 
-#[binrw::binrw]
+#[binrw::binread]
+#[derive(Debug, Clone)]
+#[br(import(event_type: u8, flags: u8, params_size: u8))]
+pub enum ComplexEventParams {
+    #[br(assert(event_type == ComplexEventType::Play as u8 
+            && ((flags & PlayEventBits::Complex as u8) == 0)))]
+    Play(BankIndex),
+    #[br(assert(event_type == ComplexEventType::PlayComplex as u8 
+            && ((flags & PlayEventBits::Complex as u8) == 0)))]
+    PlayComplex(BankIndex),
+    #[br(assert(event_type == ComplexEventType::PlayComplex as u8 
+            && ((flags & PlayEventBits::Complex as u8) != 0)))]
+    PlayComplexWaveVariations {
+        #[br(temp)]
+        wave_variations_ptr: u32,
+
+        #[br(restore_position, seek_before = SeekFrom::Start(wave_variations_ptr.into()))]
+        wave_variations: ComplexWaveVariations
+    },
+
+    Unknown(
+        /// event type
+        u8,
+        /// params
+        #[br(count = params_size)]
+        Vec<u8>,
+    ),
+}
+
+pub fn from_u24_map(bytes: [u8; 3]) -> u32 {
+    u32::from_le_bytes([bytes[0], bytes[1], bytes[2], 0])
+}
+
+#[binrw::binread]
+#[derive(Debug, Clone)]
+pub struct ComplexEvent {
+    #[br(temp)]
+    event_type: u8,
+    // event type contained by ComplexEventParams
+    #[br(map = from_u24_map)]
+    pub timestamp_ms: u32,
+    #[br(temp)]
+    parameter_size: u8,
+    pub flags: u8,
+    pub unknown_u16: u16,
+    #[br(args(event_type, flags, parameter_size))]
+    pub params: ComplexEventParams,
+}
+
+#[binrw::binread]
+#[derive(Debug, Clone)]
+pub struct Complex {
+    #[br(temp)]
+    num_events: u8,
+
+    #[br(temp, map = from_u24_map)]
+    events_ptr: u32,
+
+    #[br(count = num_events, restore_position, seek_before = SeekFrom::Start(events_ptr.into()))]
+    pub events: Vec<ComplexEvent>,
+}
+
+#[binrw::binread]
 #[derive(Debug, Clone)]
 pub struct ComplexSound {
-    pub ptr: u32,
+    #[br(temp)]
+    pub complex_ptr: u32,
+    #[br(restore_position, seek_before = SeekFrom::Start(complex_ptr.into()))]
+    pub sound: Complex,
     pub data: SoundEntryData,
 }
 
