@@ -43,14 +43,12 @@ impl LoctextResource {
         let mut cur = Cursor::new(bytes);
         let demand_header = DemandHeader::from_cursor(&mut cur)?;
 
-        cur.seek(SeekFrom::Start(
-            demand_header.loctext_resource_header_ptr as u64,
-        ))?;
+        cur.seek(SeekFrom::Start(demand_header.descriptor_ptr as u64))?;
 
         let lsbl_ptr = cur.read_u32::<LittleEndian>()?;
 
-        let lsbl_slice =
-            &bytes[demand_header.loctext_resource_header_ptr as usize + lsbl_ptr as usize..];
+        // TODO: use .get here instead of direct slice
+        let lsbl_slice = &bytes[demand_header.descriptor_ptr as usize + lsbl_ptr as usize..];
 
         let mut hashes = vec![];
 

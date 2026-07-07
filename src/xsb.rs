@@ -1,11 +1,17 @@
 use std::{
     fs,
-    io::{self, Cursor, Read, SeekFrom},
+    io::{self, Cursor, SeekFrom},
     path::{Path, PathBuf},
 };
 
 use binrw::BinReaderExt;
 use serde::Deserialize;
+
+pub mod soundbank;
+pub use soundbank::XSoundbank;
+
+pub type WavebankName = [u8; 16];
+pub type SoundbankName = WavebankName;
 
 pub fn dump_wav_files(wav_files: &[WavFile], dump_dir: PathBuf) -> Result<(), crate::Error> {
     let num_digits = (wav_files.len().checked_ilog10().unwrap_or(0) + 1) as usize;
@@ -70,6 +76,10 @@ pub struct XWavebank {
     wave_data_ptr: u32,
     #[br(temp)]
     wave_data_length: u32,
+
+    pub unknown_2: u32,
+    pub unknown_3: u32,
+    pub name: WavebankName,
 
     #[br(restore_position, count = wave_data_length, seek_before = SeekFrom::Start(wave_data_ptr.into()))]
     pub wave_data: Vec<u8>,

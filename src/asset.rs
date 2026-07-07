@@ -7,6 +7,7 @@ use std::{
 
 use crate::{AssetMetadata, DataView, RawAssetData, VirtualResourceError};
 
+use binrw::BinReaderExt;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
@@ -566,6 +567,47 @@ impl std::fmt::Debug for AssetDescription {
     }
 }
 
+/// hashes and AID using Grabbed By The Ghoulies' hashing method, which ignores aid_ and hashes the
+/// rest.
+pub fn hash_aid(aid: impl AsRef<[u8]>) -> u32 {
+    let aid = aid.as_ref();
+
+    let mut hashed = 0u32;
+
+    for c in aid.iter().copied().skip(4) {
+        // AID is null terminated
+        if c == 0 {
+            break;
+        }
+
+        (hashed, _) = u32::from(c & 0xdf).overflowing_add(hashed * 0x10);
+
+        let hash_flag = hashed & 0xf0000000;
+        if hash_flag > 0 {
+            hashed ^= hash_flag.overflowing_shr(24).0 | hash_flag
+        }
+    }
+
+    hashed
+}
+
+impl AssetData for crate::xsb::XSoundbank {
+    const ASSET_TYPE: AssetType = AssetType::XSoundbank;
+}
+
+#[binrw::binrw]
+#[derive(Debug, Clone)]
+pub struct DemandHeader {
+    pub demand_asset_type: crate::asset::AssetType,
+    pub unknown_u32_1: u32,
+    pub unknown_u32_2: u32,
+    pub num_chunks: u32,
+    pub descriptor_ptr: u32,
+    pub descriptor_size: u32,
+    pub resource_view_ptr: u32,
+    pub total_resource_size: u32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -642,5 +684,14 @@ mod tests {
         assert!(dvl1.overlaps(&dvl2), "(1) These should overlap.");
         assert!(!dvl2.overlaps(&dvl3), "(2) These should not overlap.");
         assert!(dvl1.overlaps(&dvl4), "(3) These should overlap.");
+    }
+
+    #[test]
+    fn asset_name_hashing() {
+        assert_eq!(
+            hash_aid("aid_xwavebank_ghoulies_dvd0"),
+            0x099edd10,
+            "AID hash does not match."
+        );
     }
 }
