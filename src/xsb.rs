@@ -255,7 +255,7 @@ impl WavFile {
         wavers::write(
             out_path,
             &samples,
-            (self.format.samples_per_sec / self.format.num_channels as u32) as i32,
+            (self.format.samples_per_sec) as i32,
             self.format.num_channels.into(),
         )
         .map_err(|_| io::Error::other("Failed to write wav file."))

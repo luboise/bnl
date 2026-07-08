@@ -46,44 +46,50 @@ fn main() -> Result<(), bnl::Error> {
         for (i, entry) in soundbank.sound_entries.iter().enumerate() {
             let cue_name = group.cues.get(i).ok_or("no cue at index {i}")?;
 
-            use xsb::soundbank::SoundEntry;
+            use xsb::soundbank::Sound;
 
-            let bank_indices = match entry {
-                SoundEntry::Trivial(trivial) => vec![trivial.bank_index.clone()],
-                SoundEntry::Simple(simple) => simple.variations.variations.clone(),
-                SoundEntry::Complex(complex) => {
+            let bank_indices = match &entry.sound {
+                Sound::Trivial(bank_index) => vec![bank_index.clone()],
+                Sound::Simple(variations) => variations
+                    .variations
+                    .iter()
+                    .map(|v| v.bank_index.clone())
+                    .collect(),
+                Sound::Complex(tracks) => {
                     use xsb::soundbank::ComplexEventParams;
 
-                    let Some(bank_indices) =
-                        complex
-                            .sound
-                            .events
-                            .iter()
-                            .find_map(|event| match &event.params {
+                    let mut bank_indices = vec![];
+
+                    for track in tracks {
+                        for event in &track.events {
+                            match &event.params {
                                 ComplexEventParams::Play(bank_index)
-                                | ComplexEventParams::PlayComplex(bank_index) => {
-                                    Some(vec![bank_index.clone()])
+                                | ComplexEventParams::PlayComplex { bank_index, .. } => {
+                                    bank_indices.push(bank_index.clone())
                                 }
-                                ComplexEventParams::PlayComplexWaveVariations {
-                                    wave_variations,
-                                } => Some(
-                                    wave_variations
-                                        .variations
-                                        .iter()
-                                        .map(|v| v.bank_index.clone())
-                                        .collect(),
-                                ),
-                                ComplexEventParams::Unknown(..) => None,
-                            })
-                    else {
-                        eprintln!("No play event for complex sound. Skipping.");
-                        dbg!(i, &group.name, &cue_name);
-                        continue;
-                    };
+                                ComplexEventParams::PlayVaried { wave_variations }
+                                | ComplexEventParams::PlayComplexVaried {
+                                    wave_variations, ..
+                                } => {
+                                    for complex_variation in &wave_variations.variations {
+                                        bank_indices.push(complex_variation.bank_index.clone());
+                                    }
+                                }
+                                ComplexEventParams::EnvelopeAmplitude { .. }
+                                | ComplexEventParams::Disabled()
+                                | ComplexEventParams::MixBinSpan { .. } => (),
+                            }
+                        }
+                    }
 
                     bank_indices
                 }
             };
+
+            if bank_indices.is_empty() {
+                eprintln!("No sounds found for {}_{cue_name}", group.name);
+                continue;
+            }
 
             for (
                 i,
@@ -96,7 +102,9 @@ fn main() -> Result<(), bnl::Error> {
                 let Some(wavebank_name) =
                     soundbank.wavebank_array.names.get(*wavebank_index as usize)
                 else {
-                    eprintln!("wavebank index {} not found in soundbank", wavebank_index);
+                    panic!(
+                        "wavebank index {wavebank_index} not found in soundbank (sound_index: {wave_index})"
+                    );
                     continue;
                 };
 

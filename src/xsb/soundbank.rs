@@ -14,46 +14,6 @@ pub struct CueEntry {
     pub c: u32,
 }
 
-// enum SoundEventType: u8 {
-// 	PLAY_COMPLEX = 0x01,
-// 	ENVELOPE_AMPLITUDE = 0x0a,
-// };
-//
-// struct SoundEvent {
-// 	u8 eventType;
-//
-// 	if (eventType == SoundEventType::PLAY_COMPLEX) {
-// 		u24 timestampMs;
-// 		u8 paramSize;
-// 		u8 flags;
-// 		u16 loopCount;
-//
-// 		// if XSB_PLAY_EVENT_FLAG_COMPLEX
-// 		if (flags & 0x4) {
-// 			u8* offset: u32;
-// 		} else {
-// 			u16 soundIndex;
-// 			u16 bankIndex;
-// 		}
-// 		u16 pitchVariationMin;
-// 		u16 pitchVariationMax;
-// 		u16 volumeVariationMin;
-// 		u16 volumeVariationMax;
-// 		u16 maxDelay;
-// 		u16 idk1;
-// 	} else if (eventType == SoundEventType::ENVELOPE_AMPLITUDE) {
-// 		u8 bytes[0x13];
-// 	}
-// };
-//
-// struct ComplexSound {
-// 	u8 eventCount;
-// 	u24 eventsPtr;
-//
-// 	// SoundEvent events[eventCount] @ eventsPtr;
-// 	SoundEvent events[1] @ eventsPtr;
-//  }
-
 #[repr(u8)]
 pub enum XsbSoundFlag {
     /// XSB_SOUND_FLAG_TRIVIAL
@@ -62,42 +22,14 @@ pub enum XsbSoundFlag {
     Simple = 1 << 4,
 }
 
-/*
-   if (flags & XSB_SOUND_FLAG_TRIVIAL) {
-       u16 waveIndex = entryU32;
-       u16 wavebankIndex = entryU32 >> 16;
-   }
-   else if (flags & XSB_SOUND_FLAG_SIMPLE) {
-       u32 simple @ entryU32;
-   }
-   else {
-       ComplexSound complex @ entryU32;
-   }
-*/
-
-#[expect(nonstandard_style)]
 #[derive(Debug, Clone)]
 #[binrw::binrw]
-pub struct SoundEntryData {
-    // u32 of entry resolved earlier
-    volume: u16,
-    pitch: u16,
-    trackCount: u8,
-    layer: u8,
-    category: u8,
-    flags: u8,
-    parameters3DIndex: u16,
-    priority: u8,
-    i3dl2Volume: u8,
-    eqGain: u16,
-    eqQ: u16,
-}
+pub struct SoundEntryData {}
 
 #[binrw::binread]
 #[derive(Debug, Clone)]
 pub struct TrivialSound {
-    pub bank_index: BankIndex, 
-    pub data: SoundEntryData,
+    pub bank_index: BankIndex,
 }
 
 #[binrw::binread]
@@ -107,7 +39,6 @@ pub struct SimpleSound {
     variations_ptr: u32,
     #[br(restore_position, seek_before = SeekFrom::Start(variations_ptr.into()))]
     pub variations: SimpleWaveVariations,
-    pub data: SoundEntryData,
 }
 
 #[repr(u8)]
@@ -119,20 +50,22 @@ pub enum PlayEventBits {
 #[binrw::binrw]
 #[brw(repr = u8)]
 #[repr(u8)]
-#[derive(num_enum::TryFromPrimitive)]
-#[derive(Debug, Clone)]
+#[derive(num_enum::TryFromPrimitive, Debug, Clone, PartialEq, Eq)]
 pub enum ComplexEventType {
-    Play = 0,
-    PlayComplex = 1,
+    Play = 0x00,
+    PlayComplex = 0x01,
+    EnvelopeAmplitude = 0x0a,
+    Disabled = 0x0f,
+    MixBinSpan = 0x10,
 }
 
 #[derive(Debug, Clone)]
 pub struct VariationParams {
     pub flag1: bool,
     pub flag2: bool,
-    pub current_variation: u16, // u13,
+    pub current_variation: u16,         // u13,
     pub variation_selection_method: u8, // u4
-    pub num_variations: u16 // u13 
+    pub num_variations: u16,            // u13
 }
 
 impl From<u32> for VariationParams {
@@ -142,35 +75,34 @@ impl From<u32> for VariationParams {
 
         let current_variation = (value.unbounded_shr(17) as u16) & 0b1111111111111;
         let variation_selection_method = (value.unbounded_shr(13) as u8) & 0b1111;
-        let num_variations  = (value as u16) & 0b1111111111111;
+        let num_variations = (value as u16) & 0b1111111111111;
 
         Self {
             flag1,
             flag2,
             current_variation,
             variation_selection_method,
-            num_variations
+            num_variations,
         }
     }
 }
-
 
 #[binrw::binread]
 #[derive(Debug, Clone)]
 pub struct SimpleWaveVariations {
     #[br(map = |x: [u8; 4]| u32::from_le_bytes(x).into())]
-    pub variation_params: VariationParams, 
+    pub variation_params: VariationParams,
     #[br(count = variation_params.num_variations)]
-    pub variations: Vec<BankIndex>
+    pub variations: Vec<BankIndex>,
 }
 
 #[binrw::binread]
 #[derive(Debug, Clone)]
 pub struct ComplexWaveVariations {
     #[br(map = |x: [u8; 4]| u32::from_le_bytes(x).into())]
-    pub variation_params: VariationParams, 
+    pub variation_params: VariationParams,
     #[br(count = variation_params.num_variations)]
-    pub variations: Vec<ComplexVariation>
+    pub variations: Vec<ComplexVariation>,
 }
 
 #[binrw::binread]
@@ -179,9 +111,9 @@ pub struct BankIndex {
     /// Index of sound in referenced wavebank
     pub wave_index: u16,
     /// Index of referenced wavebank in XSoundbank::wavebank_entries
+    #[br(assert(wavebank_index < 10))]
     pub wavebank_index: u16,
 }
-
 
 #[binrw::binread]
 #[derive(Debug, Clone)]
@@ -193,31 +125,71 @@ pub struct ComplexVariation {
 
 #[binrw::binread]
 #[derive(Debug, Clone)]
-#[br(import(event_type: u8, flags: u8, params_size: u8))]
+#[br(import(event_type: ComplexEventType, event_flags: u8, params_size: u8))]
 pub enum ComplexEventParams {
-    #[br(assert(event_type == ComplexEventType::Play as u8 
-            && ((flags & PlayEventBits::Complex as u8) == 0)))]
+    #[br(assert(event_type == ComplexEventType::Play
+            && ((event_flags & PlayEventBits::Complex as u8) == 0)))]
     Play(BankIndex),
-    #[br(assert(event_type == ComplexEventType::PlayComplex as u8 
-            && ((flags & PlayEventBits::Complex as u8) == 0)))]
-    PlayComplex(BankIndex),
-    #[br(assert(event_type == ComplexEventType::PlayComplex as u8 
-            && ((flags & PlayEventBits::Complex as u8) != 0)))]
-    PlayComplexWaveVariations {
+    #[br(assert(event_type == ComplexEventType::Play
+            && ((event_flags & PlayEventBits::Complex as u8) != 0)))]
+    PlayVaried {
         #[br(temp)]
         wave_variations_ptr: u32,
-
         #[br(restore_position, seek_before = SeekFrom::Start(wave_variations_ptr.into()))]
-        wave_variations: ComplexWaveVariations
+        wave_variations: ComplexWaveVariations,
     },
+    #[br(assert(event_type == ComplexEventType::PlayComplex
+            && ((event_flags & PlayEventBits::Complex as u8) == 0)))]
+    PlayComplex {
+        bank_index: BankIndex,
+        other_stuff: [u8; 12],
+    },
+    #[br(assert(event_type == ComplexEventType::PlayComplex
+            && ((event_flags & PlayEventBits::Complex as u8) != 0)))]
+    PlayComplexVaried {
+        #[br(temp)]
+        wave_variations_ptr: u32,
+        #[br(restore_position, seek_before = SeekFrom::Start(wave_variations_ptr.into()))]
+        wave_variations: ComplexWaveVariations,
+        other_stuff: [u8; 12],
+    },
+    #[br(assert(event_type == ComplexEventType::EnvelopeAmplitude))]
+    EnvelopeAmplitude {
+        delay_seconds: u16,
+        attack_seconds: u16,
+        hold_seconds: u16,
+        decay_seconds: u16,
+        release_seconds: u16,
+        sustain_power: u8,
+        unknown: u8,
+    },
+    #[br(assert(event_type == ComplexEventType::Disabled))]
+    Disabled(),
+    #[br(assert(event_type == ComplexEventType::MixBinSpan))]
+    MixBinSpan {
+        speaker_configuration: u8,
+        #[br(map = from_u24_map)]
+        angle_and_flag: u32,
 
-    Unknown(
-        /// event type
-        u8,
-        /// params
-        #[br(count = params_size)]
-        Vec<u8>,
-    ),
+        channel_index_0: u8,
+        channel_unknown_0: u8,
+        channel_volume_0: u16,
+
+        channel_index_1: u8,
+        channel_unknown_1: u8,
+        channel_volume_1: u16,
+
+        channel_index_2: u8,
+        channel_unknown_2: u8,
+        channel_volume_2: u16,
+
+        channel_index_3: u8,
+        channel_unknown_3: u8,
+        channel_volume_3: u16,
+
+        #[br(count = params_size - 20)]
+        leftover_params: Vec<u8>,
+    },
 }
 
 pub fn from_u24_map(bytes: [u8; 3]) -> u32 {
@@ -226,9 +198,9 @@ pub fn from_u24_map(bytes: [u8; 3]) -> u32 {
 
 #[binrw::binread]
 #[derive(Debug, Clone)]
-pub struct ComplexEvent {
+pub struct TrackEvent {
     #[br(temp)]
-    event_type: u8,
+    event_type: ComplexEventType,
     // event type contained by ComplexEventParams
     #[br(map = from_u24_map)]
     pub timestamp_ms: u32,
@@ -242,7 +214,7 @@ pub struct ComplexEvent {
 
 #[binrw::binread]
 #[derive(Debug, Clone)]
-pub struct Complex {
+pub struct ComplexTrack {
     #[br(temp)]
     num_events: u8,
 
@@ -250,7 +222,7 @@ pub struct Complex {
     events_ptr: u32,
 
     #[br(count = num_events, restore_position, seek_before = SeekFrom::Start(events_ptr.into()))]
-    pub events: Vec<ComplexEvent>,
+    pub events: Vec<TrackEvent>,
 }
 
 #[binrw::binread]
@@ -259,38 +231,95 @@ pub struct ComplexSound {
     #[br(temp)]
     pub complex_ptr: u32,
     #[br(restore_position, seek_before = SeekFrom::Start(complex_ptr.into()))]
-    pub sound: Complex,
-    pub data: SoundEntryData,
+    pub sound: ComplexTrack,
 }
 
 #[derive(Debug, Clone)]
-pub enum SoundEntry {
-    Trivial(TrivialSound),
-    Simple(SimpleSound),
-    Complex(ComplexSound),
+#[binrw::binread]
+#[expect(nonstandard_style)]
+pub struct SoundEntry {
+    sound_u32: [u8; 4],
+    pub volume: u16,
+    pub pitch: u16,
+    pub trackCount: u8,
+    pub layer: u8,
+    pub category: u8,
+    pub flags: u8,
+    pub parameters3DIndex: u16,
+    pub priority: u8,
+    pub i3dl2Volume: u8,
+    pub eqGain: u16,
+    pub eqQ: u16,
+
+    #[br(restore_position, args(sound_u32, flags, trackCount))]
+    pub sound: Sound,
 }
 
-impl binrw::BinRead for SoundEntry {
-    type Args<'a> = ();
+#[derive(Debug, Clone)]
+pub enum Sound {
+    Trivial(BankIndex),
+    // Non-trivial sounds
+    // Simple(/* simple variations */ VariationParams, Vec<BankIndex>),
+    Simple(ComplexWaveVariations),
+    Complex(/* complex variations */ Vec<ComplexTrack>),
+}
 
-    fn read_options<R: std::io::Read + std::io::Seek>(
+impl binrw::BinRead for Sound {
+    type Args<'a> = ([u8; 4], u8, u8);
+
+    fn read_options<R: std::io::prelude::Read + std::io::prelude::Seek>(
         reader: &mut R,
         _: binrw::Endian,
-        _: Self::Args<'_>,
-    ) -> binrw::BinResult<Self> {
-        reader.seek_relative(11)?;
-        let flags: u8 = reader.read_le()?;
-        reader.seek_relative(-12)?;
+        args: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<Self> {
+        let pos = reader.stream_position()?;
 
-        let ret = if flags & XsbSoundFlag::Trivial as u8 > 0 {
-            Self::Trivial(reader.read_le()?)
-        } else if flags & XsbSoundFlag::Simple as u8 > 0 {
-            Self::Simple(reader.read_le()?)
-        } else {
-            Self::Complex(reader.read_le()?)
-        };
+        let (sound_u32, sound_flags, num_tracks) = args;
 
-        Ok(ret)
+        if sound_flags & XsbSoundFlag::Trivial as u8 > 0 {
+            reader.seek(SeekFrom::Start(pos))?;
+
+            let wave_index = u16::from_le_bytes([sound_u32[0], sound_u32[1]]);
+            let wavebank_index = u16::from_le_bytes([sound_u32[2], sound_u32[3]]);
+
+            if wavebank_index > 10 {
+                return Err(binrw::Error::AssertFail {
+                    pos: reader.stream_position().unwrap_or_default(),
+                    message: format!("wavebank index {wavebank_index} is too large"),
+                });
+            }
+
+            return Ok(Sound::Trivial(BankIndex {
+                wave_index,
+                wavebank_index,
+            }));
+        }
+
+        // non-trivial => theres a pointer
+        reader.seek(SeekFrom::Start(u32::from_le_bytes(sound_u32).into()))?;
+
+        // simple => no track to read, just get variation table
+        if sound_flags & XsbSoundFlag::Simple as u8 > 0 {
+            return reader.read_le();
+            /*
+            let params: VariationParams = reader.read_le::<u32>()?.into();
+            let variations = (0..params.num_variations)
+                .map(|_| reader.read_le())
+                .collect::<Result<_, _>>()?;
+
+            reader.seek(SeekFrom::Start(pos))?;
+            return Ok(Sound::Simple(params, variations));
+            */
+        }
+
+        // complex => get all tracks
+        let tracks = (0..num_tracks)
+            .map(|_| reader.read_le())
+            .collect::<Result<_, _>>()?;
+
+        // reset and return
+        reader.seek(SeekFrom::Start(pos))?;
+        Ok(Sound::Complex(tracks))
     }
 }
 
