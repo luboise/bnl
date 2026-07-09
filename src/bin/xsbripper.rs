@@ -1,11 +1,18 @@
+use binrw::BinReaderExt;
 use bnl::xsb;
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
+fn main() -> Result<(), bnl::Error> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
 
-    let wav_files = xsb::wav_files_from_path(args[1].clone().into()).expect(&format!(
-        "Failed to get wave files from path {}",
-        args[1].to_string()
-    ));
-    xsb::dump_wav_files(&wav_files, args[2].clone().into()).expect("Failed to dump bytes.");
+    let path: String = args[0].clone();
+
+    let bytes = std::fs::read(path)?;
+
+    let mut cur = std::io::Cursor::new(&bytes);
+
+    let wavebank: xsb::XWavebank = cur.read_le()?;
+
+    xsb::dump_wav_entries(&wavebank.wav_entries, args[1].clone().into())?;
+
+    Ok(())
 }

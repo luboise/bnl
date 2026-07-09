@@ -102,10 +102,9 @@ fn main() -> Result<(), bnl::Error> {
                 let Some(wavebank_name) =
                     soundbank.wavebank_array.names.get(*wavebank_index as usize)
                 else {
-                    panic!(
+                    return Err(format!(
                         "wavebank index {wavebank_index} not found in soundbank (sound_index: {wave_index})"
-                    );
-                    continue;
+                    ).into());
                 };
 
                 let Some(wavebank) = wavebanks
@@ -119,15 +118,10 @@ fn main() -> Result<(), bnl::Error> {
                     continue;
                 };
 
-                // TODO: Assert group.name == soundbank.name
-                let wav_file = xsb::WavFile::from_raw(
-                    wavebank
-                        .wav_entries
-                        .get(*wave_index as usize)
-                        .cloned()
-                        .ok_or("bad sound index")?,
-                    &wavebank.wave_data,
-                )?;
+                let wav_file = wavebank
+                    .wav_entries
+                    .get(*wave_index as usize)
+                    .ok_or("bad sound index")?;
 
                 let filename = if bank_indices.len() > 1 {
                     format!("{}_{}_{i}.wav", group.name, cue_name)
