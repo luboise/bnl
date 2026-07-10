@@ -76,80 +76,97 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let sound = soundbank
                 .sound_entries
                 .get(cue.sound_index as usize)
-                .unwrap();
+                .ok_or(format!("failed to get sound index {}", cue.sound_index))?;
 
-            let bank_index = match &sound.sound {
-                Sound::Trivial(bank_index) => Some(bank_index.clone()),
+            let bank_indices = match &sound.sound {
+                Sound::Trivial(bank_index) => Some(vec![bank_index.clone()]),
                 Sound::Simple(complex_wave_variations) => Some(
                     complex_wave_variations
                         .variations
-                        .first()
-                        .unwrap()
-                        .bank_index
-                        .clone(),
+                        .iter()
+                        .map(|v| v.bank_index.clone())
+                        .collect(),
                 ),
-                Sound::Complex(complex_tracks) => complex_tracks
-                    .first()
-                    .unwrap()
-                    .events
-                    .iter()
-                    .find_map(|ev| match &ev.params {
-                        ComplexEventParams::Play(bank_index) => Some(bank_index.clone()),
-                        ComplexEventParams::PlayVaried { wave_variations }
-                        | ComplexEventParams::PlayComplexVaried {
-                            wave_variations, ..
-                        } => Some(
-                            wave_variations
-                                .variations
-                                .first()
-                                .unwrap()
-                                .bank_index
-                                .clone(),
-                        ),
-                        ComplexEventParams::PlayComplex { bank_index, .. } => {
-                            Some(bank_index.clone())
-                        }
-                        ComplexEventParams::EnvelopeAmplitude { .. }
-                        | ComplexEventParams::Disabled()
-                        | ComplexEventParams::MixBinSpan { .. } => None,
-                    }),
+                Sound::Complex(complex_tracks) => Some(
+                    complex_tracks
+                        .iter()
+                        .flat_map(|track| {
+                            track
+                                .events
+                                .iter()
+                                .filter_map(|ev| match &ev.params {
+                                    ComplexEventParams::Play(bank_index) => {
+                                        Some(vec![bank_index.clone()])
+                                    }
+                                    ComplexEventParams::PlayVaried { wave_variations }
+                                    | ComplexEventParams::PlayComplexVaried {
+                                        wave_variations,
+                                        ..
+                                    } => Some(
+                                        wave_variations
+                                            .variations
+                                            .iter()
+                                            .map(|variation| variation.bank_index.clone())
+                                            .collect(),
+                                    ),
+                                    ComplexEventParams::PlayComplex { bank_index, .. } => {
+                                        Some(vec![bank_index.clone()])
+                                    }
+                                    ComplexEventParams::EnvelopeAmplitude { .. }
+                                    | ComplexEventParams::Disabled()
+                                    | ComplexEventParams::MixBinSpan { .. } => None,
+                                })
+                                .flatten()
+                        })
+                        .collect(),
+                ),
             }
-            .unwrap();
+            .ok_or("failed to get bank index")?;
 
-            let wavebank_name = soundbank
-                .wavebank_array
-                .names
-                .get(bank_index.wavebank_index as usize)
-                .unwrap();
+            if bank_indices.is_empty() {
+                return Err(format!("no bank indices for {group_name}_{cue_name}").into());
+            }
 
-            {
-                let wavebank = wavebanks
-                    .iter_mut()
-                    .find(|wavebank| wavebank.name == *wavebank_name)
-                    .unwrap();
+            let (samples, sample_rate) = wavers::read(wav_path)
+                .map_err(|e| format!("failed to read wav file {}: {e}", wav_path.display()))?;
 
-                let bnl::xsb::WavEntry {
-                    unknown_1,
-                    format,
-                    unknown_2,
-                    unknown_3,
-                    bytes,
-                    ..
-                } = wavebank
-                    .wav_entries
-                    .get_mut(bank_index.wave_index as usize)
-                    .unwrap();
+            for bank_index in bank_indices {
+                let wavebank_name = soundbank
+                    .wavebank_array
+                    .names
+                    .get(bank_index.wavebank_index as usize)
+                    .ok_or("failed to get wavebank name")?;
 
-                let (samples, sample_rate) = wavers::read(wav_path)
-                    .map_err(|e| format!("failed to read wav file {}: {e}", wav_path.display()))?;
-                format.samples_per_sec = sample_rate as u32;
-                format.num_channels = 1;
-                format.uses_wide_format = true;
+                {
+                    let wavebank = wavebanks
+                        .iter_mut()
+                        .find(|wavebank| wavebank.name == *wavebank_name)
+                        .ok_or("failed to get wavebank by name")?;
 
-                *bytes = samples
-                    .iter()
-                    .flat_map(|v: &i16| v.to_le_bytes())
-                    .collect::<Vec<_>>();
+                    let bnl::xsb::WavEntry {
+                        unknown_1,
+                        format,
+                        unknown_2,
+                        unknown_3,
+                        bytes,
+                        ..
+                    } = wavebank
+                        .wav_entries
+                        .get_mut(bank_index.wave_index as usize)
+                        .ok_or(format!(
+                            "failed to get bank {} wave {}",
+                            bank_index.wave_index, bank_index.wavebank_index
+                        ))?;
+
+                    format.samples_per_sec = sample_rate as u32;
+                    format.num_channels = 1;
+                    format.uses_wide_format = true;
+
+                    *bytes = samples
+                        .iter()
+                        .flat_map(|v: &i16| v.to_le_bytes())
+                        .collect::<Vec<_>>();
+                }
             }
         }
 
