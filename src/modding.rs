@@ -67,6 +67,7 @@ pub struct Mod {
     /// The assets which came with the mod
     pub raw_asset_overrides: HashMap<String, RawAssetOverride>,
     pub cutscene_mods: HashMap<String, CutsceneMod>,
+    pub audio_replacements: Vec<(String, String, std::path::PathBuf)>,
     // pub model_mods: HashMap<String, ModelMod>,
 }
 
@@ -81,7 +82,7 @@ impl Mod {
             },
             raw_asset_overrides: HashMap::default(),
             cutscene_mods: HashMap::new(),
-            // model_mods: HashMap::new(),
+            audio_replacements: vec![],
         }
     }
 
@@ -101,6 +102,40 @@ impl Mod {
             ))?;
 
         let spec: ModSpecification = serde_json::from_slice(&fs::read(mod_root_file)?)?;
+
+        let audio_replacements = {
+            let mut v = vec![];
+
+            if let Some(audio_dir) = root_dir
+                .iter()
+                .find(|dir| dir.is_dir() && dir.file_name().unwrap_or_default() == "audio")
+            {
+                let re = Regex::new(r"^(G[a-zA-Z]+)_(.*).wav$").unwrap();
+
+                for file in std::fs::read_dir(audio_dir)? {
+                    let file = file?;
+
+                    let file_name = file
+                        .file_name()
+                        .into_string()
+                        .map_err(|_| "failed to read file path")?;
+
+                    let Some((_, [group_name, cue_name])) =
+                        re.captures(&file_name).map(|caps| caps.extract())
+                    else {
+                        return Err(format!(
+                            "failed to parse file name: {}",
+                            file.file_name().display()
+                        )
+                        .into());
+                    };
+
+                    v.push((group_name.to_owned(), cue_name.to_owned(), file.path()));
+                }
+            }
+
+            v
+        };
 
         let raw_override_dirs = fs::read_dir(
             root_dir
@@ -300,7 +335,7 @@ impl Mod {
             spec,
             raw_asset_overrides,
             cutscene_mods,
-            // model_mods,
+            audio_replacements, // model_mods,
         })
     }
 

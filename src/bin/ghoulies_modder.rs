@@ -1,12 +1,15 @@
 use std::collections::HashMap;
 
+use binrw::{BinRead, BinWrite};
+use bnl::xsb::soundbank::{ComplexEventParams, Sound};
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     let game_dir: std::path::PathBuf = args[0].clone().into();
     let modification = bnl::modding::Mod::from_dir(&args[1])?;
 
-    let bnl_paths = walkdir::WalkDir::new(game_dir)
+    let bnl_paths = walkdir::WalkDir::new(game_dir.clone())
         .into_iter()
         .filter_map(|e| e.ok())
         .filter_map(|entry| {
@@ -17,6 +20,145 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .then(|| entry.path().to_path_buf())
         })
         .collect::<Vec<_>>();
+
+    {
+        let wavebank_hashes = [
+            "harddisk0",
+            "harddisk1",
+            "dvd0",
+            "dvd1",
+            "dvd2",
+            "dvd3",
+            "dvd4",
+            "dvd5",
+            "dvd6",
+            "dvd7",
+            "dvd8",
+            "dvddemo",
+        ]
+        .map(|v| "aid_xwavebank_ghoulies_".to_string() + v)
+        .map(bnl::asset::hash_aid);
+
+        let common = bnl_paths
+            .iter()
+            .find(|path| path.ends_with("common.bnl"))
+            .cloned()
+            .ok_or("no common.bnl")?;
+
+        let common_bnl = bnl::BNLFile::from_bytes(&std::fs::read(&common)?)?;
+        let cue_list = common_bnl
+            .get_asset::<bnl::asset::cuelist::CueList>("aid_xcuelist_ghoulies_default")?;
+
+        let mut wavebanks = wavebank_hashes
+            .iter()
+            .map(|wavebank_hash| {
+                let path = game_dir.join(format!("xwavebank/{wavebank_hash:08x}"));
+                bnl::xsb::XWavebank::read_le(&mut std::fs::File::open(path)?)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for (group_name, cue_name, wav_path) in &modification.audio_replacements {
+            let group = cue_list
+                .data
+                .groups()
+                .iter()
+                .find(|v| v.name == *group_name)
+                .unwrap();
+            let cue_index = group.cues.iter().position(|cue| cue == cue_name).unwrap();
+
+            let soundbank_aid = format!("aid_xsoundbank_ghoulies_{}", &group.name[1..]);
+            let soundbank = common_bnl
+                .get_asset::<bnl::xsb::XSoundbank>(&soundbank_aid)?
+                .data;
+
+            let cue = soundbank.cue_entries.get(cue_index).unwrap();
+
+            let sound = soundbank
+                .sound_entries
+                .get(cue.sound_index as usize)
+                .unwrap();
+
+            let bank_index = match &sound.sound {
+                Sound::Trivial(bank_index) => Some(bank_index.clone()),
+                Sound::Simple(complex_wave_variations) => Some(
+                    complex_wave_variations
+                        .variations
+                        .first()
+                        .unwrap()
+                        .bank_index
+                        .clone(),
+                ),
+                Sound::Complex(complex_tracks) => complex_tracks
+                    .first()
+                    .unwrap()
+                    .events
+                    .iter()
+                    .find_map(|ev| match &ev.params {
+                        ComplexEventParams::Play(bank_index) => Some(bank_index.clone()),
+                        ComplexEventParams::PlayVaried { wave_variations }
+                        | ComplexEventParams::PlayComplexVaried {
+                            wave_variations, ..
+                        } => Some(
+                            wave_variations
+                                .variations
+                                .first()
+                                .unwrap()
+                                .bank_index
+                                .clone(),
+                        ),
+                        ComplexEventParams::PlayComplex { bank_index, .. } => {
+                            Some(bank_index.clone())
+                        }
+                        ComplexEventParams::EnvelopeAmplitude { .. }
+                        | ComplexEventParams::Disabled()
+                        | ComplexEventParams::MixBinSpan { .. } => None,
+                    }),
+            }
+            .unwrap();
+
+            let wavebank_name = soundbank
+                .wavebank_array
+                .names
+                .get(bank_index.wavebank_index as usize)
+                .unwrap();
+
+            {
+                let wavebank = wavebanks
+                    .iter_mut()
+                    .find(|wavebank| wavebank.name == *wavebank_name)
+                    .unwrap();
+
+                let bnl::xsb::WavEntry {
+                    unknown_1,
+                    format,
+                    unknown_2,
+                    unknown_3,
+                    bytes,
+                    ..
+                } = wavebank
+                    .wav_entries
+                    .get_mut(bank_index.wave_index as usize)
+                    .unwrap();
+
+                let (samples, sample_rate) = wavers::read(wav_path)
+                    .map_err(|e| format!("failed to read wav file {}: {e}", wav_path.display()))?;
+                format.samples_per_sec = sample_rate as u32;
+                format.num_channels = 1;
+                format.uses_wide_format = true;
+
+                *bytes = samples
+                    .iter()
+                    .flat_map(|v: &i16| v.to_le_bytes())
+                    .collect::<Vec<_>>();
+            }
+        }
+
+        for (wavebank, hash) in wavebanks.into_iter().zip(wavebank_hashes) {
+            wavebank.write_le(&mut std::fs::File::create(
+                game_dir.join(format!("xwavebank/{hash:08x}")),
+            )?)?;
+        }
+    }
 
     let mut assets = HashMap::default();
 
