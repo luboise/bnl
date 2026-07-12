@@ -148,7 +148,7 @@ impl TryFrom<Model> for gltf_writer::Gltf {
 #[derive(Debug, Clone, Default)]
 pub struct NdGltfContext {
     pub(crate) current_node_name: Option<String>,
-    pub(crate) properties: indexmap::IndexMap<String, Vec<u8>>,
+    pub(crate) properties: crate::asset::model::ModelProperties,
 
     pub(crate) gltf: gltf_writer::Gltf,
     pub(crate) positions_accessor: Option<GltfIndex>,

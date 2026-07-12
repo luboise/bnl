@@ -1,5 +1,3 @@
-use std::fmt::Write;
-
 use crate::utils::compare_streams;
 
 use super::*;
@@ -38,14 +36,14 @@ fn full_model_2() -> Result<(), Box<dyn std::error::Error>> {
     )
     .map_err(|e| format!("{e:?}"))?;
 
-    {
-        let shader_params = model
-            .model_subresource
-            .nodes
-            .iter()
-            .flat_map(|node| node.heirarchy())
-            .filter(|node| matches!(node.data.as_ref(), nd::NdData::ShaderParam2(_)));
-    }
+    // {
+    //     let shader_params = model
+    //         .model_subresource
+    //         .nodes
+    //         .iter()
+    //         .flat_map(|node| node.heirarchy())
+    //         .filter(|node| matches!(node.data.as_ref(), nd::NdData::ShaderParam2(_)));
+    // }
     {
         let push_buffer = model
             .model_subresource
@@ -65,6 +63,41 @@ fn full_model_2() -> Result<(), Box<dyn std::error::Error>> {
         // remove one draw call (should offset the rest of the file)
         push_buffer.draw_calls.pop();
     }
+
+    let out_1 = crate::RawAssetData::try_from(model)?;
+
+    let model_2 = Model::try_from(out_1.clone())?;
+    let out_2 = crate::RawAssetData::try_from(model_2)?;
+
+    compare_streams(&out_1.descriptor_bytes, &out_2.descriptor_bytes)?;
+    compare_streams(
+        out_1.resource_chunks.first().unwrap(),
+        out_2.resource_chunks.first().unwrap(),
+    )?;
+
+    Ok(())
+}
+*/
+
+#[test]
+fn player_model() -> Result<(), Box<dyn std::error::Error>> {
+    let model = Model::try_from(crate::RawAssetData {
+        descriptor_bytes: include_bytes!("test_player_descriptor").to_vec(),
+        resource_chunks: vec![include_bytes!("test_player_resource").to_vec()],
+    })?;
+
+    let mut gltf = gltf_writer::Gltf::try_from(model.clone())?;
+
+    let out_dir = std::path::PathBuf::from("./out/boy_blend_shapes");
+
+    gltf.prepare_for_export().unwrap();
+    std::fs::create_dir_all(&out_dir)?;
+    let _ = std::fs::remove_file(out_dir.join("boy.gltf"));
+    gltf.export(
+        &out_dir.join("boy.gltf"),
+        gltf_writer::serialisation::SerialGltfType::JSON,
+    )
+    .unwrap();
 
     let out_1 = crate::RawAssetData::try_from(model)?;
     std::fs::write("testoutput", &out_1.descriptor_bytes)?;

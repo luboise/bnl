@@ -115,7 +115,7 @@ impl Model {
     }
 
     #[deprecated(note = "use Model::properties")]
-    pub fn key_value_map(&self) -> &indexmap::IndexMap<String, Vec<u8>> {
+    pub fn key_value_map(&self) -> &ModelProperties {
         &self.model_subresource.properties
     }
 }
@@ -386,6 +386,8 @@ impl TryFrom<Model> for crate::RawAssetData {
             mut resource,
             rigid_entries,
             properties: _,
+            property_counts: _,
+            in_blend_shape: _,
         } = std::rc::Rc::try_unwrap(mwc)
             .map_err(|e| "model write context still in use after finishing export")?
             .into_inner();

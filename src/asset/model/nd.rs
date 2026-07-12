@@ -61,19 +61,10 @@ fn serialize_vec_len<T, S: serde::Serializer>(v: &[T], s: S) -> Result<S::Ok, S:
 pub struct Nd {
     #[br(temp, try_calc = {r.stream_position()?.try_into().map_err(br_error(r))})]
     _base: u32,
-    #[br(calc = mrc.properties.iter()
-            .find_map(|(key, value)| {
-                if value.len() != 4 {
-                    return None;
-                } 
-
-                let value = u32::from_le_bytes(value.as_slice().try_into().unwrap());
-                if value != _base {
-                    return None;
-                }
-
-                Some(key.clone())
-    }))]
+    #[br(calc = mrc.properties.get_keys_from_u32(_base)
+        .iter()
+        .find(|key| !super::is_bone_name(key))
+        .cloned())]
     #[bw(ignore)]
     pub name: Option<String>,
     #[br(temp, assert(nd_type_str_ptr != 0))]
@@ -130,26 +121,6 @@ pub(crate) fn br_get_stream_pos(
         .ok_or("bad conversion".into())
 }
 
-
-pub type ModelWriteContext = std::rc::Rc<std::cell::RefCell<ModelWriteContextInner>>;
-
-pub fn new_write_context() -> ModelWriteContext {
-    ModelWriteContext::new(ModelWriteContextInner {
-        nd_heirarchy_ptrs: vec![],
-        resource: vec![],
-        rigid_entries: vec![],
-        properties: Default::default()
-    }.into())
-}
-
-#[derive(Clone, Debug)]
-pub struct ModelWriteContextInner {
-    pub nd_heirarchy_ptrs: Vec<u32>,
-    pub resource: Vec<u8>,
-    pub rigid_entries: Vec<(u64, Vec<u8>)>,
-    pub properties: indexmap::IndexMap<String, Vec<u8>>
-}
-
 impl binrw::BinWrite for Nd {
     type Args<'a> = ModelWriteContext;
 
@@ -178,11 +149,30 @@ impl binrw::BinWrite for Nd {
         // if has name, update the property to current offset
         if let Some(name) = name {
             let bytes_to_write = u32::try_from(writer.stream_position()?).unwrap().to_le_bytes().to_vec();
-
             let mut borrowed = mwc.borrow_mut();
+            let count = {
+                let borrowed_count = borrowed.property_counts.entry(name.clone()).or_insert(0);
 
-            let entry = borrowed.properties.entry(name.clone()).or_insert(bytes_to_write.clone());
-            *entry = bytes_to_write;
+                let count = *borrowed_count;
+                *borrowed_count += 1;
+
+                count
+            };
+
+            let Some(x) = borrowed.properties.get_all(name).into_iter().nth(count) else {
+                let message =  format!("key updated {} times, but appears only {} times", count, count-1);
+                return Err(binrw::Error::AssertFail { pos: writer.stream_position().unwrap_or(0), message });
+            };
+               
+            if x.len() != 4 {
+                return Err(binrw::Error::AssertFail {
+                    pos: writer.stream_position().unwrap_or(0),
+                    message: format!("key {} has value.len() != 4", name) 
+                });
+            }
+
+            let bytes_to_write = u32::try_from(writer.stream_position()?).unwrap().to_le_bytes().to_vec();
+            x.copy_from_slice(&bytes_to_write);
         }
 
         let name_ptr =
@@ -200,10 +190,20 @@ impl binrw::BinWrite for Nd {
         writer.write_le(&0u32)?;
         writer.write_le(&0u32)?;
 
-        let parent = mwc.borrow().nd_heirarchy_ptrs.last().copied().unwrap_or(0);
-        writer.write_le(&parent)?;
+        let parent = if mwc.borrow().in_blend_shape {
+            0
+        } else {
+            mwc.borrow().nd_heirarchy_ptrs.last().copied().unwrap_or(0)
+        };
 
+        writer.write_le(&parent)?;
         writer.write_le_args(data, mwc.clone())?;
+
+
+        // return early if in a blend shape
+        if mwc.borrow().in_blend_shape {
+            return Ok(())
+        }
 
         if let Some(first_child) = first_child {
             mwc.borrow_mut().nd_heirarchy_ptrs.push(base as u32);
@@ -468,34 +468,6 @@ impl<'a> Iterator for NdIteratorMut<'a> {
     }
 }
 
-#[derive(Clone, Copy)]
-pub struct ModelReadContext<'a> {
-    pub properties: &'a indexmap::IndexMap<String, Vec<u8>>,
-    pub resource: &'a [u8],
-}
-
-impl<'a> ModelReadContext<'a> {
-    pub fn new(properties: &'a indexmap::IndexMap<String, Vec<u8>>, resource: &'a [u8]) -> Self {
-        Self {
-            properties,
-            resource,
-        }
-    }
-
-    pub fn get_bone_name(&self, bone_index: u32) -> Option<&str> {
-        self.properties.iter().find_map(|(k, v)| {
-            (is_bone_name(k)
-                && v.len() == 4
-                && u32::from_le_bytes(v.as_slice().try_into().unwrap()) == bone_index)
-                .then_some(k.as_str())
-        })
-    }
-}
-
-pub fn is_bone_name<S: AsRef<str>>(s: S) -> bool {
-    ["BASE", "MID", "joint3"].contains(&s.as_ref())
-}
-
 pub struct ModelSlice<'a> {
     pub(crate) slice: &'a [u8],
     pub(crate) read_start: usize,
@@ -731,7 +703,6 @@ impl binrw::BinRead for NdBlendShapeData {
             reader.read_le_args((mrc,))
         }).collect::<Result<Vec<Nd>, binrw::Error>>()?;
 
-
         Ok(Self { nodes })
     }
 }
@@ -745,8 +716,48 @@ impl binrw::BinWrite for NdBlendShapeData {
         _: binrw::Endian,
         mwc: Self::Args<'_>,
     ) -> binrw::BinResult<()> {
+        let in_blend_shape = {
+            let mut borrow = mwc.borrow_mut();
+            let in_blend_shape = borrow.in_blend_shape;
+            borrow.in_blend_shape = true;
+
+            in_blend_shape
+        };
+
+        let ptrs_start = writer.stream_position()? as u32 + 8;
+
+        let num_shapes = self.nodes.len() as u32;
+
+        writer.write_le(&ptrs_start)?;
+        writer.write_le(&num_shapes)?;
+
+        // skip the pointers
+        writer.seek_relative((num_shapes * 4) as i64)?;
+
+        let ptrs = {
+            let mut ptrs = vec![];
+            for nd in &self.nodes {
+                ptrs.push(writer.stream_position()? as u32);
+                writer.write_le_args(nd, mwc.clone())?;
+            }
+            ptrs
+        };
+
+        let end = writer.stream_position()?;
+
+        writer.seek(SeekFrom::Start(ptrs_start.into()))?;
+
+        for ptr in ptrs{
+            writer.write_le(&ptr)?;
+        }
+
+        writer.seek(SeekFrom::Start(end))?;
+
+        mwc.borrow_mut().in_blend_shape = in_blend_shape;
+
+        writer.write_all(b"ndBlendShape\x00\x00\x00\x00")?;
+
         Ok(())
-        // todo!()
     }
 }
 
