@@ -25,7 +25,10 @@ fn app() -> Element {
 
         if let Err(e) = unpack_game(game_dir, mod_dir) {
             eprintln!("failed to apply mods: {e}");
+            return;
         }
+
+        println!("mod successfully applied");
     };
 
     rsx! {
