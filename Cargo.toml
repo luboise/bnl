@@ -31,6 +31,8 @@ strum = { version = "0.28.0", features = ["derive"] }
 jkl = "0.2.1"
 image = "0.25.10"
 dioxus = { version = "0.7", features = ["desktop"] }
+rfd = "0.17.2"
+xbpatch-core = { git = "https://github.com/luboise/xbpatch", version = "0.1.0" }
 
 [lib]
 name = "bnl"

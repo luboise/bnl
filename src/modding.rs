@@ -9,6 +9,7 @@ use crate::{
     BNLFile,
     asset::{AssetType, Parse, aidlist::AidList},
 };
+use binrw::{BinRead, BinWrite};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -68,7 +69,7 @@ pub struct Mod {
     pub raw_asset_overrides: HashMap<String, RawAssetOverride>,
     pub cutscene_mods: HashMap<String, CutsceneMod>,
     pub audio_replacements: Vec<(String, String, std::path::PathBuf)>,
-    // pub model_mods: HashMap<String, ModelMod>,
+    pub model_mods: HashMap<String, ModelMod>,
 }
 
 impl Mod {
@@ -83,6 +84,7 @@ impl Mod {
             raw_asset_overrides: HashMap::default(),
             cutscene_mods: HashMap::new(),
             audio_replacements: vec![],
+            model_mods: HashMap::new(),
         }
     }
 
@@ -137,6 +139,32 @@ impl Mod {
             v
         };
 
+        let model_mods = {
+            let mut model_mods = HashMap::new();
+
+            if let Some(models_dir) = root_dir
+                .iter()
+                .find(|dir| dir.is_dir() && dir.file_name().unwrap_or_default() == "models")
+            {
+                for model_mod_path in std::fs::read_dir(models_dir)?.filter_map(|v| {
+                    let path = v.ok()?.path();
+                    Some(path).filter(|p| p.is_dir())
+                }) {
+                    let aid = format!(
+                        "aid_model_ghoulies_{}",
+                        model_mod_path
+                            .file_name()
+                            .and_then(|v| v.to_str())
+                            .ok_or("no file name on model mod")?
+                    );
+
+                    model_mods.insert(aid, ModelMod::from_dir(model_mod_path)?);
+                }
+            }
+
+            model_mods
+        };
+
         let raw_override_dirs = fs::read_dir(
             root_dir
                 .iter()
@@ -168,7 +196,6 @@ impl Mod {
 
         let mut raw_asset_overrides = HashMap::<String, RawAssetOverride>::new();
         let mut cutscene_mods = HashMap::new();
-        // let mut model_mods = HashMap::new();
 
         if let Some(raw_override_dirs) = raw_override_dirs {
             for raw_override_dir in raw_override_dirs {
@@ -335,7 +362,8 @@ impl Mod {
             spec,
             raw_asset_overrides,
             cutscene_mods,
-            audio_replacements, // model_mods,
+            audio_replacements,
+            model_mods,
         })
     }
 
@@ -361,7 +389,7 @@ impl Mod {
             })
             .chain(self.raw_asset_overrides.keys().cloned())
             .chain(self.cutscene_mods.keys().cloned())
-            // .chain(self.model_mods.keys().cloned())
+            .chain(self.model_mods.keys().cloned())
             .collect()
     }
 
@@ -436,10 +464,9 @@ impl crate::modding::ModLike for CutsceneMod {
     }
 }
 
-/*
 #[derive(Debug, Clone)]
 pub struct ModelMod {
-    textures: HashMap<u32, crate::asset::texture::Texture>,
+    textures: HashMap<usize, crate::asset::texture::Texture>,
 }
 
 impl crate::modding::ModLike for ModelMod {
@@ -447,44 +474,30 @@ impl crate::modding::ModLike for ModelMod {
 
     fn apply(
         &self,
-        _asset_data: &mut Self::AssetDataType,
+        asset_data: &mut Self::AssetDataType,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        todo!("ModelMod::apply unimplemented, use apply_raw");
-    }
+        if asset_data.textures_subresource.is_none() {
+            return Ok(());
+        }
 
-    fn apply_raw(
-        &self,
-        raw_asset: &mut crate::RawAssetData,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut tm = crate::asset::model::TexturedModel::new(
-            &raw_asset.descriptor_bytes,
-            &raw_asset
-                .resource()
-                .ok_or("texture has no resource".to_owned())?,
-        )?;
+        let Some(textures_subres) = &mut asset_data.textures_subresource else {
+            return Err("no textures subresource on model".into());
+        };
 
         for (index, new_texture) in &self.textures {
-            let Some(crate::asset::model::TexturedModelSubresource::Textures(texture_subres)) = tm
-                .subresources
-                .get_mut(&crate::asset::model::ModelSubresType::Texture)
-            else {
-                return Err("no texture subres".into());
-            };
-
-            let existing_tex = texture_subres
+            let existing_tex = textures_subres
                 .textures
-                .get_mut(usize::try_from(*index)?)
+                .get_mut(*index)
                 .ok_or_else(|| format!("no texture for index {index}"))?;
 
             existing_tex.override_from(new_texture, false)?;
         }
 
-        let (desc, res) = tm.serialize()?;
-
-        raw_asset.descriptor_bytes = desc;
-        raw_asset.resource_chunks = vec![res];
-
         Ok(())
+    }
+
+    fn apply_raw(&self, _: &mut crate::RawAssetData) -> Result<(), Box<dyn std::error::Error>> {
+        todo!("apply_raw unimplemented, use apply instead");
     }
 
     fn from_dir(dir: impl AsRef<Path>) -> Result<Self, Box<dyn std::error::Error>> {
@@ -527,4 +540,294 @@ impl crate::modding::ModLike for ModelMod {
         Ok(Self { textures })
     }
 }
-*/
+
+pub fn apply_mod_to_game(
+    game_dir: impl AsRef<std::path::Path>,
+    mod_dir: impl AsRef<std::path::Path>,
+) -> Result<(), crate::Error> {
+    let game_dir = game_dir.as_ref();
+    let modification = crate::modding::Mod::from_dir(mod_dir)?;
+
+    let bnl_paths = walkdir::WalkDir::new(game_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter_map(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "bnl")
+                .then(|| entry.path().to_path_buf())
+        })
+        .collect::<Vec<_>>();
+
+    {
+        let wavebank_hashes = [
+            "harddisk0",
+            "harddisk1",
+            "dvd0",
+            "dvd1",
+            "dvd2",
+            "dvd3",
+            "dvd4",
+            "dvd5",
+            "dvd6",
+            "dvd7",
+            "dvd8",
+            "dvddemo",
+        ]
+        .map(|v| "aid_xwavebank_ghoulies_".to_string() + v)
+        .map(crate::asset::hash_aid);
+
+        let common = bnl_paths
+            .iter()
+            .find(|path| path.ends_with("common.bnl"))
+            .cloned()
+            .ok_or("no common.bnl")?;
+
+        let common_bnl = crate::BNLFile::from_bytes(&std::fs::read(&common)?)?;
+        let cue_list = common_bnl
+            .get_asset::<crate::asset::cuelist::CueList>("aid_xcuelist_ghoulies_default")?;
+
+        let mut wavebanks = wavebank_hashes
+            .iter()
+            .map(|wavebank_hash| {
+                let path = game_dir.join(format!("xwavebank/{wavebank_hash:08x}"));
+                crate::xsb::XWavebank::read_le(&mut std::fs::File::open(path)?)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        for (group_name, cue_name, wav_path) in &modification.audio_replacements {
+            let group = cue_list
+                .data
+                .groups()
+                .iter()
+                .find(|v| v.name == *group_name)
+                .unwrap();
+            let cue_index = group.cues.iter().position(|cue| cue == cue_name).unwrap();
+
+            let soundbank_aid = format!("aid_xsoundbank_ghoulies_{}", &group.name[1..]);
+            let soundbank = common_bnl
+                .get_asset::<crate::xsb::XSoundbank>(&soundbank_aid)?
+                .data;
+
+            let cue = soundbank.cue_entries.get(cue_index).unwrap();
+
+            let sound = soundbank
+                .sound_entries
+                .get(cue.sound_index as usize)
+                .ok_or(format!("failed to get sound index {}", cue.sound_index))?;
+
+            let bank_indices = match &sound.sound {
+                crate::xsb::soundbank::Sound::Trivial(bank_index) => Some(vec![bank_index.clone()]),
+                crate::xsb::soundbank::Sound::Simple(complex_wave_variations) => Some(
+                    complex_wave_variations
+                        .variations
+                        .iter()
+                        .map(|v| v.bank_index.clone())
+                        .collect(),
+                ),
+                crate::xsb::soundbank::Sound::Complex(complex_tracks) => Some(
+                    complex_tracks
+                        .iter()
+                        .flat_map(|track| {
+                            track
+                                .events
+                                .iter()
+                                .filter_map(|ev| {
+                                    match &ev.params {
+                                    crate::xsb::soundbank::ComplexEventParams::Play(bank_index) => {
+                                        Some(vec![bank_index.clone()])
+                                    }
+                                    crate::xsb::soundbank::ComplexEventParams::PlayVaried {
+                                        wave_variations,
+                                    }
+                                    | crate::xsb::soundbank::ComplexEventParams::PlayComplexVaried {
+                                        wave_variations,
+                                        ..
+                                    } => Some(
+                                        wave_variations
+                                            .variations
+                                            .iter()
+                                            .map(|variation| variation.bank_index.clone())
+                                            .collect(),
+                                    ),
+                                    crate::xsb::soundbank::ComplexEventParams::PlayComplex { bank_index, .. } => {
+                                        Some(vec![bank_index.clone()])
+                                    }
+                                    crate::xsb::soundbank::ComplexEventParams::EnvelopeAmplitude { .. }
+                                    | crate::xsb::soundbank::ComplexEventParams::Disabled()
+                                    | crate::xsb::soundbank::ComplexEventParams::MixBinSpan { .. } => None,
+                                }
+                                })
+                                .flatten()
+                        })
+                        .collect(),
+                ),
+            }
+            .ok_or("failed to get bank index")?;
+
+            if bank_indices.is_empty() {
+                return Err(format!("no bank indices for {group_name}_{cue_name}").into());
+            }
+
+            let (samples, sample_rate) = wavers::read(wav_path)
+                .map_err(|e| format!("failed to read wav file {}: {e}", wav_path.display()))?;
+
+            for bank_index in bank_indices {
+                let wavebank_name = soundbank
+                    .wavebank_array
+                    .names
+                    .get(bank_index.wavebank_index as usize)
+                    .ok_or("failed to get wavebank name")?;
+
+                {
+                    let wavebank = wavebanks
+                        .iter_mut()
+                        .find(|wavebank| wavebank.name == *wavebank_name)
+                        .ok_or("failed to get wavebank by name")?;
+
+                    let crate::xsb::WavEntry { format, bytes, .. } = wavebank
+                        .wav_entries
+                        .get_mut(bank_index.wave_index as usize)
+                        .ok_or(format!(
+                            "failed to get bank {} wave {}",
+                            bank_index.wave_index, bank_index.wavebank_index
+                        ))?;
+
+                    format.samples_per_sec = sample_rate as u32;
+                    format.num_channels = 1;
+                    format.uses_wide_format = true;
+
+                    *bytes = samples
+                        .iter()
+                        .flat_map(|v: &i16| v.to_le_bytes())
+                        .collect::<Vec<_>>();
+                }
+            }
+        }
+
+        for (wavebank, hash) in wavebanks.into_iter().zip(wavebank_hashes) {
+            wavebank.write_le(&mut std::fs::File::create(
+                game_dir.join(format!("xwavebank/{hash:08x}")),
+            )?)?;
+        }
+    }
+
+    let mut assets = HashMap::default();
+
+    // Get overrides from mod
+    for (aid, raw_override) in &modification.raw_asset_overrides {
+        let raw_asset = bnl_paths
+            .iter()
+            .find_map(|path| {
+                // TODO: Display errors here properly
+                let bytes = std::fs::read(path).ok()?;
+
+                if crate::get_aid_list(&bytes).ok()?.contains(aid) {
+                    let mut raw_asset = crate::BNLFile::from_bytes(&bytes)
+                        .ok()?
+                        .get_raw_asset(aid)?
+                        .to_owned();
+
+                    raw_asset.data = raw_override.data.clone();
+
+                    Some(raw_asset)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| format!("{aid} not found"))?;
+
+        assets.insert(aid.clone(), raw_asset);
+    }
+
+    // Get rest of assets from game files
+    for aid in modification.affected_assets() {
+        if assets.contains_key(&aid) {
+            continue;
+        }
+
+        let found_asset = bnl_paths
+            .iter()
+            .find_map(|path| {
+                // TODO: Display errors here properly
+                let bytes = std::fs::read(path).ok()?;
+
+                if crate::get_aid_list(&bytes).ok()?.contains(&aid) {
+                    Some(
+                        crate::BNLFile::from_bytes(&bytes)
+                            .ok()?
+                            .get_raw_asset(&aid)?
+                            .to_owned(),
+                    )
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| format!("Unable to find asset {aid}"))?;
+
+        assets.insert(aid, found_asset);
+    }
+
+    for (_aid, _asset) in assets
+        .iter_mut()
+        .filter(|(aid, _)| modification.cutscene_mods.contains_key(*aid))
+    {
+        todo!("cutscene mod apply not implemented (BUG ME ABOUT THIS)");
+        // Apply the cutscene mod
+    }
+
+    for (aid, raw_asset) in assets
+        .iter_mut()
+        .filter(|(aid, _)| modification.model_mods.contains_key(*aid))
+    {
+        // TODO: remove this clone somehow
+        let mut model = raw_asset.data.clone().try_into()?;
+
+        let model_mod = modification.model_mods.get(aid).unwrap();
+        model_mod.apply(&mut model)?;
+
+        raw_asset.data = crate::RawAssetData::try_from(model)?;
+    }
+
+    let mut ctx = crate::modding::ModContext {
+        bnl_basename: String::default(),
+        all_bnl_paths: vec![],
+        assets,
+    };
+
+    ctx.all_bnl_paths = bnl_paths.clone();
+
+    for bnl_path in bnl_paths {
+        let bnl_bytes = std::fs::read(&bnl_path)?;
+        let Ok(aid_list) = crate::get_aid_list(&bnl_bytes) else {
+            continue;
+        };
+
+        ctx.bnl_basename = bnl_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_owned())
+            .unwrap();
+
+        if aid_list.iter().all(|aid| !ctx.assets.contains_key(aid))
+            && !modification.spec.bnl_edits.contains_key(&ctx.bnl_basename)
+        {
+            continue;
+        }
+
+        let mut bnl = crate::BNLFile::from_bytes(&bnl_bytes).expect("Stupid bnl error");
+
+        let num_applied = modification.apply(&mut ctx, &mut bnl)?;
+
+        if num_applied > 0 {
+            println!(
+                "Applied {num_applied} modifications to {}",
+                bnl_path.display(),
+            );
+            std::fs::write(bnl_path, bnl.to_bytes()?)?;
+        }
+    }
+
+    Ok(())
+}
