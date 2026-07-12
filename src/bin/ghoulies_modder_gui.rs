@@ -1,5 +1,5 @@
 use dioxus::prelude::*;
-use std::collections::HashMap;
+use std::{collections::HashMap, env::current_dir};
 
 use binrw::{BinRead, BinWrite};
 use bnl::xsb::soundbank::{ComplexEventParams, Sound};
@@ -8,17 +8,62 @@ fn main() {
     dioxus::desktop::launch::launch(app, Default::default(), Default::default())
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct AppState {
+    game_dir: Option<std::path::PathBuf>,
+    mod_dir: Option<std::path::PathBuf>,
+    rebuild_game: bool,
+    output_iso_path: Option<std::path::PathBuf>,
+}
+
+impl AppState {
+    pub fn config_path() -> std::path::PathBuf {
+        current_dir().unwrap_or("./".into()).join("config.json")
+    }
+
+    pub fn save(&self) -> Result<(), bnl::Error> {
+        serde_json::to_writer_pretty(
+            std::io::BufWriter::new(std::fs::File::create(Self::config_path())?),
+            self,
+        )?;
+        Ok(())
+    }
+    pub fn load() -> Result<Self, bnl::Error> {
+        let v = serde_json::from_slice(&std::fs::read(Self::config_path())?)?;
+        Ok(v)
+    }
+}
+
 fn app() -> Element {
-    let mut game_dir = use_signal(|| std::env::home_dir().or(std::env::current_dir().ok()));
-    let mut mod_dir = use_signal(|| std::env::current_dir().ok());
+    let mut game_dir = use_signal(|| {
+        AppState::load()
+            .ok()
+            .and_then(|state| state.game_dir)
+            .or(std::env::home_dir())
+            .or(std::env::current_dir().ok())
+    });
+    let mut mod_dir = use_signal(|| {
+        AppState::load()
+            .ok()
+            .and_then(|state| state.mod_dir)
+            .or(std::env::home_dir())
+            .or(std::env::current_dir().ok())
+    });
+
+    let mut rebuild_game = use_signal(|| false);
+    let mut output_iso_path = use_signal(|| {
+        std::env::current_dir()
+            .map(|v| v.join("modded.iso"))
+            .unwrap_or_default()
+    });
 
     let onclick = move |_| {
-        let Some(game_dir) = game_dir.cloned() else {
+        let Some(game_dir) = game_dir() else {
             eprintln!("bad game dir");
             return;
         };
 
-        let Some(mod_dir) = mod_dir.cloned() else {
+        let Some(mod_dir) = mod_dir() else {
             eprintln!("bad game dir");
             return;
         };
@@ -29,33 +74,80 @@ fn app() -> Element {
         }
 
         println!("mod successfully applied");
+
+        if !rebuild_game() {
+            return;
+        }
+
+        println!("rebuilding game");
     };
+
+    use_effect(move || {
+        println!("{rebuild_game:?}");
+        let state = AppState {
+            game_dir: game_dir(),
+            mod_dir: mod_dir(),
+            rebuild_game: rebuild_game(),
+            output_iso_path: rebuild_game().then_some(output_iso_path()),
+        };
+
+        if let Err(e) = state.save() {
+            eprintln!("error saving app state: {e}");
+        }
+    });
 
     rsx! {
         div {
             display: "flex",
             flex_direction: "column",
             label { "Game Directory" }
-            input {
-                type: "file",
-                directory: true,
-                name: "game_dir",
-                onchange: move |evt| {
-                    let file = evt.files().first().map(|file| file.path());
-                    game_dir.set(file);
+            div {
+                button {
+                    onclick: move |_| {
+                        game_dir.set(rfd::FileDialog::new()
+                            .set_directory(game_dir().unwrap_or("./".into()))
+                            .pick_folder()
+                            .or(game_dir())
+                            );
+                    },
+                    "Choose Dir"
                 }
+                "{game_dir.cloned().map(|v|v.display().to_string()).unwrap_or(\"no path selected\".into())}"
             }
             label { "Mod Directory" }
-            input {
-                type: "file",
-                directory: true,
-                name: "mod_dir",
-                // value: mod_dir.cloned().map(|v| v.display().to_string()),
-                onchange: move |evt| {
-                    let file = evt.files().first().map(|file| file.path());
-                    mod_dir.set(file);
+            div {
+                button {
+                    onclick: move |_| {
+                        mod_dir.set(rfd::FileDialog::new()
+                            .set_directory(mod_dir().unwrap_or("./".into()))
+                            .pick_folder()
+                            .or(mod_dir())
+                            );
+                    },
+                    "Choose Dir"
                 }
+                "{mod_dir.cloned().map(|v| v.display().to_string()).unwrap_or(\"no path selected\".into())}"
             }
+            // label { "Rebuild Game" }
+            // input {
+            //     type: "checkbox",
+            //     checked: rebuild_game.cloned(),
+            //     oninput: move |_| rebuild_game.set(!rebuild_game())
+            // }
+            //
+            // {
+            //     rebuild_game
+            //         .cloned()
+            //         .then(move || rsx!{
+            //            label { "Output ISO Directory" },
+            //            input {
+            //                type: "file",
+            //                value: output_iso_path.cloned().display().to_string(),
+            //                oninput: move |event| output_iso_path.set(event.value().into())
+            //            }
+            //        })
+            // }
+
             button {
                 onclick, "mod"
             }
