@@ -12,8 +12,7 @@ fn main() {
 struct AppState {
     game_dir: Option<std::path::PathBuf>,
     mod_dir: Option<std::path::PathBuf>,
-    rebuild_game: bool,
-    output_iso_path: Option<std::path::PathBuf>,
+    rebuild_iso_path: Option<std::path::PathBuf>,
 }
 
 impl AppState {
@@ -50,12 +49,13 @@ fn app() -> Element {
             .or(std::env::current_dir().ok())
     });
 
-    let mut rebuild_game = use_signal(|| false);
     let mut output_iso_path = use_signal(|| {
-        std::env::current_dir()
-            .map(|v| v.join("modded.iso"))
-            .unwrap_or_default()
+        AppState::load()
+            .ok()
+            .and_then(|state| state.rebuild_iso_path)
+            .or(std::env::current_dir().ok().map(|v| v.join("modded.iso")))
     });
+    let mut rebuild_game = use_memo(move || output_iso_path().is_some());
 
     let onclick = move |_| {
         let Some(game_dir) = game_dir() else {
@@ -68,7 +68,7 @@ fn app() -> Element {
             return;
         };
 
-        if let Err(e) = unpack_game(game_dir, mod_dir) {
+        if let Err(e) = unpack_game(&game_dir, mod_dir) {
             eprintln!("failed to apply mods: {e}");
             return;
         }
@@ -80,15 +80,27 @@ fn app() -> Element {
         }
 
         println!("rebuilding game");
+
+        let Some(iso_path) = output_iso_path() else {
+            eprintln!("no iso path selected.");
+            return;
+        };
+
+        if let Err(e) = xbpatch_core::iso_handling::create_iso("extract-xiso", &iso_path, &game_dir)
+        {
+            eprintln!("failed to rebuild iso: {e}");
+            return;
+        }
+
+        println!("\nsuccessfully rebuilt game");
     };
 
     use_effect(move || {
-        println!("{rebuild_game:?}");
+        println!("{rebuild_game}");
         let state = AppState {
             game_dir: game_dir(),
             mod_dir: mod_dir(),
-            rebuild_game: rebuild_game(),
-            output_iso_path: rebuild_game().then_some(output_iso_path()),
+            rebuild_iso_path: output_iso_path(),
         };
 
         if let Err(e) = state.save() {
@@ -112,7 +124,7 @@ fn app() -> Element {
                     },
                     "Choose Dir"
                 }
-                "{game_dir.cloned().map(|v|v.display().to_string()).unwrap_or(\"no path selected\".into())}"
+                "{game_dir().map(|v| v.display().to_string()).unwrap_or(\"no path selected\".into())}"
             }
             label { "Mod Directory" }
             div {
@@ -126,27 +138,33 @@ fn app() -> Element {
                     },
                     "Choose Dir"
                 }
-                "{mod_dir.cloned().map(|v| v.display().to_string()).unwrap_or(\"no path selected\".into())}"
+                "{mod_dir().map(|v| v.display().to_string()).unwrap_or(\"no path selected\".into())}"
             }
-            // label { "Rebuild Game" }
-            // input {
-            //     type: "checkbox",
-            //     checked: rebuild_game.cloned(),
-            //     oninput: move |_| rebuild_game.set(!rebuild_game())
-            // }
-            //
-            // {
-            //     rebuild_game
-            //         .cloned()
-            //         .then(move || rsx!{
-            //            label { "Output ISO Directory" },
-            //            input {
-            //                type: "file",
-            //                value: output_iso_path.cloned().display().to_string(),
-            //                oninput: move |event| output_iso_path.set(event.value().into())
-            //            }
-            //        })
-            // }
+            label { "Rebuild Game" }
+            input {
+                type: "checkbox",
+                checked: rebuild_game(),
+                onchange: move |evt| rebuild_game.set(evt.checked())
+            }
+
+            div {
+                if rebuild_game() {
+                    label { "Output ISO Path" },
+                    div {
+                        button {
+                            onclick: move |_| {
+                                output_iso_path.set(rfd::FileDialog::new()
+                                    .set_directory(output_iso_path().unwrap_or("./".into()))
+                                    .pick_file()
+                                    .or(output_iso_path())
+                                    );
+                            },
+                            "Choose Path"
+                        }
+                        "{output_iso_path().map(|v| v.display().to_string()).unwrap_or(\"no path selected\".into())}"
+                    }
+                }
+            }
 
             button {
                 onclick, "mod"
