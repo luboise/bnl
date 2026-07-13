@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::Path};
 
-use bnl::asset::loctext::LoctextResource;
+use bnl::asset::loctext::Loctext;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -13,7 +13,7 @@ fn main() {
     let json: HashMap<String, String> =
         serde_json::from_slice(&json_bytes).expect("Failed to deserialise json.");
 
-    let loctext = LoctextResource::from_hashmap(json).expect("Failed to read LoctextResource.");
+    let loctext = Loctext::from_hashmap(json).expect("Failed to read LoctextResource.");
 
     std::fs::write(
         out_path.to_str().unwrap(),

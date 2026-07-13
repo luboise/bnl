@@ -5,6 +5,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use binrw::BinWrite;
 use bnl::{BNLFile, asset::AssetType};
 use clap::{Parser, Subcommand};
 use walkdir::WalkDir;
@@ -83,7 +84,7 @@ enum Commands {
     },
 }
 
-fn main() {
+fn main() -> Result<(), bnl::Error> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -92,29 +93,18 @@ fn main() {
             output_dir,
         } => {
             if bnl_files.is_empty() {
-                eprintln!("Unable to extract: no bnl files provided.");
-                error_exit();
+                return Err("Unable to extract: no bnl files provided.".into());
             }
 
             for bnl_file in bnl_files {
                 println!("Extracting BNL file {}", bnl_file.display());
 
-                let bytes: Vec<u8> = match std::fs::read(&bnl_file) {
-                    Ok(f) => f,
-                    Err(e) => {
-                        eprintln!("Unable to open file {}. Error: {}", bnl_file.display(), e);
-                        error_exit();
-                    }
-                };
+                let bytes = std::fs::read(&bnl_file)
+                    .map_err(|e| format!("unable to open {}: {e}", bnl_file.display()))?
+                    .to_vec();
 
-                let bnl = match BNLFile::from_bytes(&bytes) {
-                    Ok(b) => b,
-                    Err(e) => {
-                        eprintln!("Unable to process BNL file: {:?}", e);
-
-                        error_exit();
-                    }
-                };
+                let bnl = BNLFile::from_bytes(&bytes)
+                    .map_err(|e| format!("failed to process BNL file: {e}"))?;
 
                 let raw_assets = bnl.get_raw_assets();
 
@@ -129,49 +119,45 @@ fn main() {
                 // ./out/common_bnl
                 let bnl_out_path = Path::new(&output_dir).join(out_filename);
 
-                raw_assets.iter().for_each(|raw_asset| {
+                for raw_asset in raw_assets {
                     // ./out/common_bnl/aid_texture_xyz
-                    let asset_path: PathBuf = bnl_out_path.join(raw_asset.name());
+                    let asset_path = bnl_out_path.join(raw_asset.metadata.name());
 
                     if asset_path.is_file() {
-                        eprintln!(
-                            "Unable to write to {} (A file already exists by that name)",
+                        return Err(format!(
+                            "unable to write to directory {} (file already exists)",
                             asset_path.display()
-                        );
-
-                        error_exit();
+                        )
+                        .into());
                     } else if !asset_path.exists() {
-                        match fs::create_dir_all(&asset_path) {
-                            Ok(_) => (),
-                            Err(e) => {
-                                eprintln!(
-                                    "Unable to create directory {}.\nError: {}",
-                                    asset_path.display(),
-                                    e
-                                );
-
-                                error_exit();
-                            }
-                        }
+                        fs::create_dir_all(&asset_path).map_err(|e| {
+                            format!(
+                                "Unable to create directory {}.\nError: {}",
+                                asset_path.display(),
+                                e
+                            )
+                        })?
                     }
 
-                    std::fs::write(asset_path.join("metadata"), raw_asset.metadata().to_bytes())
-                        .unwrap_or_else(|e| {
-                            eprintln!(
-                                "Unable to write metadata for {}\nError: {}",
-                                &raw_asset.name(),
-                                e
-                            );
-                        });
+                    if let Err(e) = raw_asset
+                        .metadata()
+                        .write_le(&mut std::fs::File::create(asset_path.join("metadata"))?)
+                    {
+                        eprintln!(
+                            "Unable to write metadata for {}\nError: {}",
+                            &raw_asset.metadata.name(),
+                            e
+                        );
+                    }
 
                     std::fs::write(
                         asset_path.join("descriptor"),
-                        raw_asset.data.descriptor_bytes(),
+                        &raw_asset.data.descriptor_bytes,
                     )
                     .unwrap_or_else(|e| {
                         eprintln!(
                             "Unable to write descriptor for {}\nError: {}",
-                            &raw_asset.name(),
+                            &raw_asset.metadata.name(),
                             e
                         );
                     });
@@ -182,13 +168,13 @@ fn main() {
                                 .unwrap_or_else(|e| {
                                     eprintln!(
                                         "Unable to write descriptor for {}\nError: {}",
-                                        raw_asset.name(),
+                                        raw_asset.metadata.name(),
                                         e
                                     );
                                 });
                         });
                     }
-                });
+                }
             }
         }
 
@@ -258,18 +244,10 @@ fn main() {
                 output_file.display()
             );
 
-            let bnl_bytes = match bnl.to_bytes() {
-                Ok(v) => v,
-                Err(e) => {
-                    eprintln!("Failed to serialize bnl to bytes: {e}");
-                    error_exit();
-                }
-            };
+            let bnl_bytes = bnl.to_bytes()?;
 
-            if let Err(e) = fs::write(output_file, bnl_bytes) {
-                eprintln!("Failed to write output bnl file. Error: {}", e);
-                error_exit();
-            }
+            std::fs::write(output_file, bnl_bytes)
+                .map_err(|e| format!("failed to write output bnl file: {e}"))?;
 
             println!("\nSuccessfully wrote bnl file.");
         }
@@ -280,21 +258,11 @@ fn main() {
             asset_type_filter,
             print_summary,
         } => {
-            let bytes: Vec<u8> = match std::fs::read(&bnl_path) {
-                Ok(f) => f,
-                Err(e) => {
-                    eprintln!("Unable to open file {}. Error: {}", bnl_path.display(), e);
-                    error_exit();
-                }
-            };
+            let bytes = std::fs::read(&bnl_path)
+                .map_err(|e| format!("unable to open {}: {e}", bnl_path.display()))?;
 
-            let bnl = match BNLFile::from_bytes(&bytes) {
-                Ok(b) => b,
-                Err(e) => {
-                    eprintln!("Unable to process BNL file: {:?}", e);
-                    error_exit();
-                }
-            };
+            let bnl = BNLFile::from_bytes(&bytes)
+                .map_err(|e| format!("unable to process bnl file: {e}"))?;
 
             let mut raw_assets = bnl
                 .get_raw_assets()
@@ -317,7 +285,7 @@ fn main() {
             }
 
             raw_assets.iter().for_each(|raw_asset| {
-                println!("{}", raw_asset.name());
+                println!("{}", raw_asset.metadata.name());
             });
 
             if print_summary {
@@ -349,19 +317,10 @@ fn main() {
             }
         }
 
-        Commands::Diff {
-            file_1,
-            file_2,
-            names_only,
-            ignore_order,
-        } => {
+        Commands::Diff { .. } => {
             println!("Diff feature coming soon.");
         }
     }
-}
 
-fn error_exit() -> ! {
-    eprintln!("\nUnable to continue.");
-
-    std::process::exit(1);
+    Ok(())
 }

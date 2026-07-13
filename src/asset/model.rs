@@ -389,7 +389,7 @@ impl TryFrom<Model> for crate::RawAssetData {
             property_counts: _,
             in_blend_shape: _,
         } = std::rc::Rc::try_unwrap(mwc)
-            .map_err(|e| "model write context still in use after finishing export")?
+            .map_err(|_| "model write context still in use after finishing export")?
             .into_inner();
 
         if !nd_heirarchy_ptrs.is_empty() {

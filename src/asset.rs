@@ -1,14 +1,14 @@
 use std::{
     cmp,
     fmt::{self, Display},
-    io::{self, Cursor, Read, Write},
+    io::{self, Cursor},
     path::Path,
 };
 
 use crate::{AssetMetadata, DataView, RawAssetData, VirtualResourceError};
 
-use binrw::BinReaderExt;
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use binrw::{BinReaderExt, BinWriterExt};
+use byteorder::{LittleEndian, WriteBytesExt};
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 
 pub mod param;
@@ -325,6 +325,7 @@ pub const MAX_ASSET_NAME_LENGTH: usize = size_of::<AssetName>() - 1;
 pub const ASSET_DESCRIPTION_SIZE: usize = 0xa0;
 
 #[derive(Clone)]
+#[binrw::binrw]
 pub struct AssetDescription {
     pub(crate) metadata: AssetMetadata,
 
@@ -338,8 +339,12 @@ pub struct AssetDescription {
 
 // Taken from project_grabbed
 // https://github.com/x1nixmzeng/project-grabbed
-#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, TryFromPrimitive, IntoPrimitive)]
+#[derive(
+    Debug, Hash, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, TryFromPrimitive, IntoPrimitive,
+)]
 #[repr(u32)]
+#[binrw::binrw]
+#[brw(repr = u32)]
 pub enum AssetType {
     Texture = 1,
     Anim = 2,
@@ -374,20 +379,6 @@ pub enum AssetType {
 
     // Helper to let RawAssetData satisfy AssetLike
     Raw = 31,
-}
-
-impl Ord for AssetType {
-    fn cmp(&self, other: &Self) -> cmp::Ordering {
-        let x: u32 = (*self).into();
-        let y: u32 = (*other).into();
-        x.cmp(&y)
-    }
-}
-
-impl PartialOrd for AssetType {
-    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 impl Display for AssetType {
@@ -467,57 +458,17 @@ impl TryFrom<&str> for AssetType {
 }
 
 impl AssetDescription {
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, std::io::Error> {
+    #[deprecated(note = "use binrw to parse")]
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, crate::Error> {
         let mut cur = Cursor::new(&bytes);
-
-        let mut name: AssetName = [0u8; 0x80];
-        cur.read_exact(&mut name)?;
-
-        let asset_type = AssetType::try_from(cur.read_u32::<LittleEndian>()?)
-            .map_err(|_| std::io::Error::other("Unable to parse asset type from BNL."))?;
-
-        let unk_1 = cur.read_u32::<LittleEndian>()?;
-        let unk_2 = cur.read_u32::<LittleEndian>()?;
-
-        let metadata = AssetMetadata {
-            name,
-            asset_type,
-            unk_1,
-            unk_2,
-        };
-
-        let asset_description = AssetDescription {
-            metadata,
-            chunk_count: cur.read_u32::<LittleEndian>()?,
-            descriptor_ptr: cur.read_u32::<LittleEndian>()?,
-            descriptor_size: cur.read_u32::<LittleEndian>()?,
-            dataview_list_ptr: cur.read_u32::<LittleEndian>()?,
-            resource_size: cur.read_u32::<LittleEndian>()?,
-        };
-
-        Ok(asset_description)
+        Ok(cur.read_le()?)
     }
 
+    #[deprecated(note = "use binrw to serialize")]
     pub fn to_bytes(&self) -> [u8; ASSET_DESCRIPTION_SIZE] {
         let mut bytes = [0x00; ASSET_DESCRIPTION_SIZE];
-
         let mut cur = Cursor::new(&mut bytes[..]);
-
-        // Ensure the size of the name is 128 so that we can safely unwrap
-        assert_eq!(size_of_val(&self.metadata.name), 0x80);
-        cur.write_all(&self.metadata.name).unwrap();
-
-        cur.write_u32::<LittleEndian>(self.metadata.asset_type.into())
-            .unwrap();
-        cur.write_u32::<LittleEndian>(self.metadata.unk_1).unwrap();
-        cur.write_u32::<LittleEndian>(self.metadata.unk_2).unwrap();
-        cur.write_u32::<LittleEndian>(self.chunk_count).unwrap();
-        cur.write_u32::<LittleEndian>(self.descriptor_ptr).unwrap();
-        cur.write_u32::<LittleEndian>(self.descriptor_size).unwrap();
-        cur.write_u32::<LittleEndian>(self.dataview_list_ptr)
-            .unwrap();
-        cur.write_u32::<LittleEndian>(self.resource_size).unwrap();
-
+        cur.write_le(self).unwrap();
         bytes
     }
 
@@ -553,21 +504,36 @@ impl AssetDescription {
 
 impl std::fmt::Debug for AssetDescription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self {
+            metadata:
+                AssetMetadata {
+                    name: _,
+                    asset_type,
+                    unk_1,
+                    unk_2,
+                },
+            chunk_count,
+            descriptor_ptr,
+            descriptor_size,
+            dataview_list_ptr,
+            resource_size,
+        } = self;
+
         f.debug_struct("HeaderEntry")
             .field("name", &self.name())
-            .field("res_type", &self.metadata.asset_type)
-            .field("unk_1", &self.metadata.unk_1)
-            .field("unk_2", &self.metadata.unk_2)
-            .field("chunk_count", &self.chunk_count)
-            .field("descriptor_ptr", &self.descriptor_ptr)
-            .field("descriptor_size", &self.descriptor_size)
-            .field("bufferview_list_ptr", &self.dataview_list_ptr)
-            .field("resource_size", &self.resource_size)
+            .field("res_type", asset_type)
+            .field("unk_1", unk_1)
+            .field("unk_2", unk_2)
+            .field("chunk_count", chunk_count)
+            .field("descriptor_ptr", descriptor_ptr)
+            .field("descriptor_size", descriptor_size)
+            .field("bufferview_list_ptr", dataview_list_ptr)
+            .field("resource_size", resource_size)
             .finish()
     }
 }
 
-/// hashes and AID using Grabbed By The Ghoulies' hashing method, which ignores aid_ and hashes the
+/// hashes an AID using Grabbed By The Ghoulies' hashing method, which ignores aid_ and hashes the
 /// rest.
 pub fn hash_aid(aid: impl AsRef<[u8]>) -> u32 {
     let aid = aid.as_ref();

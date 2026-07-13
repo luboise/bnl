@@ -44,3 +44,8 @@ path = "src/lib.rs"
 [[bin]]
 name = "bnltool"
 path = "src/bin/bnltool.rs"
+
+[[bin]]
+name = "ghoulies_modder_gui"
+path = "src/bin/ghoulies_modder_gui.rs"
+required-features = ["dioxus"]

@@ -229,7 +229,7 @@ impl TryFrom<Texture> for crate::RawAssetData {
         let mut descriptor_bytes = vec![];
         value
             .descriptor
-            .write_le(&mut Cursor::new(&mut descriptor_bytes));
+            .write_le(&mut Cursor::new(&mut descriptor_bytes))?;
 
         Ok(crate::RawAssetData {
             descriptor_bytes,

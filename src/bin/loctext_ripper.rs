@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use bnl::asset::loctext::LoctextResource;
+use bnl::asset::loctext::Loctext;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -9,7 +9,7 @@ fn main() {
 
     let bytes = std::fs::read(loctext_path).expect("Failed to read file.");
 
-    let loctext = LoctextResource::from_bytes(&bytes).expect("Failed to read LoctextResource.");
+    let loctext = Loctext::from_bytes(&bytes).expect("Failed to read LoctextResource.");
 
     std::fs::write(
         format!(
