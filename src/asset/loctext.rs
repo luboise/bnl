@@ -1,18 +1,136 @@
-mod serialisation;
 use std::{
     cmp::Ordering,
     collections::{HashMap, HashSet},
     io::{BufRead, Cursor, Read, Seek, SeekFrom},
 };
 
+use binrw::BinReaderExt;
 use byteorder::{BigEndian, LittleEndian, ReadBytesExt, WriteBytesExt};
 use serde::Serialize;
-use serialisation::*;
 
 use crate::asset::AssetParseError;
 
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum TextAlignment {
+    Centre,
+}
+impl std::fmt::Display for TextAlignment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TextAlignment::Centre => write!(f, "centre"),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub enum LoctextEvent {
+    PlaySfx(String),
+    TextAlignment(TextAlignment),
+    Text(String),
+    /// {linek}
+    Newline,
+    Variable(String),
+    End,
+}
+
+impl std::fmt::Display for LoctextEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoctextEvent::PlaySfx(sfx) => write!(f, "{{sfx {sfx}}}"),
+            LoctextEvent::TextAlignment(text_alignment) => write!(f, "{{{text_alignment}}}"),
+            LoctextEvent::Text(text) => write!(f, "{text}"),
+            LoctextEvent::Newline => write!(f, "{{linek}}"),
+            LoctextEvent::Variable(v) => write!(f, "{{{v}}}"),
+            LoctextEvent::End => write!(f, "{{end}}"),
+        }
+    }
+}
+
+#[derive(PartialEq, Eq, Debug, Clone)]
+pub struct LoctextValue {
+    pub character: String,
+    pub events: Vec<LoctextEvent>,
+}
+
+impl TryFrom<&str> for LoctextValue {
+    type Error = crate::Error;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        let get_bracketed = |it: &mut std::iter::Peekable<std::str::Chars<'_>>| {
+            let Some('{') = it.next() else {
+                return Err(crate::Error::from("loctext not starting with {"));
+            };
+
+            let mut s = String::new();
+            for c in it {
+                if c == '}' {
+                    break;
+                }
+
+                s.push(c)
+            }
+
+            Ok(s)
+        };
+
+        let mut events = vec![];
+
+        let mut chars = value.chars().peekable();
+
+        let character = get_bracketed(&mut chars)?;
+
+        let mut s = String::new();
+
+        while let Some(c) = chars.peek().copied() {
+            if c == '{' {
+                if !s.is_empty() {
+                    events.push(LoctextEvent::Text(std::mem::take(&mut s)));
+                }
+
+                let mut b_val = get_bracketed(&mut chars)?;
+                if b_val.starts_with("sfx ") {
+                    events.push(LoctextEvent::PlaySfx(
+                        std::mem::take(&mut b_val).chars().skip(4).collect(),
+                    ))
+                } else if b_val == "centre" {
+                    events.push(LoctextEvent::TextAlignment(TextAlignment::Centre))
+                } else if b_val == "end" {
+                    events.push(LoctextEvent::End);
+                    if chars.clone().count() != 0 {
+                        return Err("loctext should've ended".into());
+                    }
+                } else if b_val == "linek" {
+                    events.push(LoctextEvent::Newline)
+                } else {
+                    events.push(LoctextEvent::Variable(b_val))
+                }
+
+                continue;
+            }
+
+            s.push(chars.next().unwrap());
+        }
+
+        Ok(Self { character, events })
+    }
+}
+
+impl std::fmt::Display for LoctextValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { character, events } = self;
+
+        write!(f, "{{{character}}}")?;
+
+        for event in events {
+            write!(f, "{event}")?;
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug, Serialize)]
-pub struct LoctextResource {
+pub struct Loctext {
     #[serde(
         flatten,
         serialize_with = "serde_ordered_collections::map::sorted_serialize"
@@ -20,7 +138,7 @@ pub struct LoctextResource {
     values: HashMap<String, String>,
 }
 
-impl LoctextResource {
+impl Loctext {
     pub fn hash_loctext_key<S: AsRef<[u8]>>(s: S) -> u16 {
         let bytes = s.as_ref();
 
@@ -39,9 +157,9 @@ impl LoctextResource {
         hash as u16
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<LoctextResource, AssetParseError> {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Loctext, crate::Error> {
         let mut cur = Cursor::new(bytes);
-        let demand_header = DemandHeader::from_cursor(&mut cur)?;
+        let demand_header: super::DemandHeader = cur.read_le()?;
 
         cur.seek(SeekFrom::Start(demand_header.descriptor_ptr as u64))?;
 
@@ -64,9 +182,7 @@ impl LoctextResource {
             cur.read_exact(&mut lsbl_signature)?;
 
             if lsbl_signature != ['L', 'S', 'B', 'L'].map(|v| v as u8) {
-                return Err(AssetParseError::InvalidDataViews(
-                    "LSBL file signature does not match".to_string(),
-                ));
+                return Err("LSBL file signature does not match".into());
             }
 
             let values_ptr = cur.read_u32::<LittleEndian>()?;
@@ -97,10 +213,11 @@ impl LoctextResource {
             let expected_size: u32 = 8 + (size_of::<u16>() * hash_list_length as usize) as u32;
 
             if hash_list_size_bytes != expected_size {
-                return Err(AssetParseError::InvalidDataViews(format!(
+                return Err(format!(
                     "Hash list in LSBL file has {} entries, but {} bytes (expected {} bytes)",
                     hash_list_length, hash_list_size_bytes, expected_size
-                )));
+                )
+                .into());
             }
 
             hashes.resize(hash_list_length as usize, 0);
@@ -124,10 +241,11 @@ impl LoctextResource {
 
                 let sentinel = chars_cur.read_u16::<LittleEndian>()?;
                 if sentinel != 0xFFFF {
-                    return Err(AssetParseError::InvalidDataViews(format!(
+                    return Err(format!(
                         "Sentinel not found after values in LSBL file (found 0x{:04x} instead)",
                         sentinel
-                    )));
+                    )
+                    .into());
                 }
 
                 let num_chars = chars_cur.read_u32::<LittleEndian>()?;
@@ -165,10 +283,10 @@ impl LoctextResource {
 
             let minimum_size = keys_list_length * 8 + 8;
             if keys_section_size < minimum_size {
-                return Err(AssetParseError::InvalidDataViews(format!(
+                return Err(format!(
                     "Keys list in LSBL file has {} entries, but only {} bytes (expected at least {} bytes)",
                     keys_list_length, keys_section_size, minimum_size
-                )));
+                ).into());
             }
 
             let mut key_chars = vec![0u8; (keys_section_size - 8 - keys_list_length * 8) as usize];
@@ -218,13 +336,14 @@ impl LoctextResource {
             values: keys_map
                 .into_iter()
                 .map(|(key, hash)| {
-                    values_map
+                    let val = values_map
                         .remove(&hash)
-                        .map(|val| (key.clone(), val))
                         .ok_or(AssetParseError::InvalidDataViews(format!(
                             "Key {} with hash {} does not have an accompanying value.",
                             key, hash
-                        )))
+                        )))?;
+
+                    Ok::<_, crate::Error>((key.clone(), val))
                 })
                 .collect::<Result<HashMap<_, _>, _>>()?,
         })
@@ -291,7 +410,7 @@ impl LoctextResource {
         let mut hash_to_pair = HashMap::<u16, KeyPair>::new();
         for (k, v) in self.values.clone() {
             let mut key: Vec<u8> = k.chars().map(|c| c as u8).collect();
-            let mut hash = LoctextResource::hash_loctext_key(&key);
+            let mut hash = Loctext::hash_loctext_key(&key);
 
             // Add null terminator
             key.push(0u8);
@@ -521,26 +640,37 @@ impl LoctextResource {
 
 #[cfg(test)]
 mod tests {
-    use crate::asset::loctext::LoctextResource;
+    use crate::asset::loctext::{Loctext, LoctextValue};
 
     #[test]
     pub fn chapter_names_hash_correctly() -> Result<(), String> {
-        assert_eq!(LoctextResource::hash_loctext_key("chaptername__1"), 0x1d1);
-        assert_eq!(LoctextResource::hash_loctext_key("chaptername__1"), 0x1d1);
-        assert_eq!(LoctextResource::hash_loctext_key("chaptername__2"), 0x1d2);
-        assert_eq!(LoctextResource::hash_loctext_key("chaptername__3"), 0x1d3);
-        assert_eq!(LoctextResource::hash_loctext_key("chaptername__4"), 0x1d4);
-        assert_eq!(LoctextResource::hash_loctext_key("chaptername__5"), 0x1d5);
-        assert_eq!(LoctextResource::hash_loctext_key("chapternumber__1"), 0xe21);
-        assert_eq!(LoctextResource::hash_loctext_key("chapternumber__2"), 0xe22);
-        assert_eq!(LoctextResource::hash_loctext_key("chapternumber__3"), 0xe23);
-        assert_eq!(LoctextResource::hash_loctext_key("chapternumber__4"), 0xe24);
-        assert_eq!(LoctextResource::hash_loctext_key("chapternumber__5"), 0xe25);
+        assert_eq!(Loctext::hash_loctext_key("chaptername__1"), 0x1d1);
+        assert_eq!(Loctext::hash_loctext_key("chaptername__1"), 0x1d1);
+        assert_eq!(Loctext::hash_loctext_key("chaptername__2"), 0x1d2);
+        assert_eq!(Loctext::hash_loctext_key("chaptername__3"), 0x1d3);
+        assert_eq!(Loctext::hash_loctext_key("chaptername__4"), 0x1d4);
+        assert_eq!(Loctext::hash_loctext_key("chaptername__5"), 0x1d5);
+        assert_eq!(Loctext::hash_loctext_key("chapternumber__1"), 0xe21);
+        assert_eq!(Loctext::hash_loctext_key("chapternumber__2"), 0xe22);
+        assert_eq!(Loctext::hash_loctext_key("chapternumber__3"), 0xe23);
+        assert_eq!(Loctext::hash_loctext_key("chapternumber__4"), 0xe24);
+        assert_eq!(Loctext::hash_loctext_key("chapternumber__5"), 0xe25);
 
         assert_eq!(
-            LoctextResource::hash_loctext_key("dialogs__challengeawards_scaredyspiders_bronze"),
+            Loctext::hash_loctext_key("dialogs__challengeawards_scaredyspiders_bronze"),
             0xfa02
         );
+
+        Ok(())
+    }
+
+    #[test]
+    pub fn loctext_entry() -> Result<(), crate::Error> {
+        const TEXT_DIALOG: &str = "{piratecaptain}{sfx GDIALOGUE_PIRATE_CHEER}{centre}Ye stayed in one piece long enough{linek}ta wallop {finalscore} lubbers, but that ain't{linek}enough ta win ye any booty! Harrrr!{end}";
+
+        let value = LoctextValue::try_from(TEXT_DIALOG)?;
+
+        assert_eq!(TEXT_DIALOG, value.to_string());
 
         Ok(())
     }
