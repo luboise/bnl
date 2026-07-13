@@ -3,6 +3,9 @@ name = "bnl"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+dioxus = ["dep:dioxus"]
+
 [dependencies]
 byteorder = "1.5.0"
 miniz_oxide = "0.8.9"
@@ -30,7 +33,7 @@ binrw = "0.15.1"
 strum = { version = "0.28.0", features = ["derive"] }
 jkl = "0.2.1"
 image = "0.25.10"
-dioxus = { version = "0.7", features = ["desktop"] }
+dioxus = { version = "0.7", optional = true, features = ["desktop"] }
 rfd = "0.17.2"
 xbpatch-core = { git = "https://github.com/luboise/xbpatch", version = "0.1.0" }
 
