@@ -280,6 +280,68 @@ impl RawAssetData {
         }
     }
 
+    pub fn from_demand_file(
+        data: &[u8],
+    ) -> Result<(crate::asset::DemandHeader, Self), crate::Error> {
+        let demand_header: crate::asset::DemandHeader = std::io::Cursor::new(data).read_le()?;
+
+        let descriptor_ptr = demand_header.descriptor_ptr;
+        let descriptor_size = demand_header.descriptor_size;
+
+        let descriptor_bytes = data
+            .get(descriptor_ptr as usize..(descriptor_ptr + descriptor_size).try_into()?)
+            .ok_or_else(|| {
+                format!(
+                    "failed to get descriptor slice [{descriptor_ptr}..{end}] from len {len}",
+                    end = descriptor_ptr + descriptor_size,
+                    len = data.len()
+                )
+            })?
+            .to_vec();
+
+        let resource_chunks = if demand_header.total_resource_size == 0 {
+            vec![]
+        } else {
+            let resource_view_ptr = demand_header.resource_view_ptr;
+
+            let slice = data
+                .get(resource_view_ptr as usize..demand_header.descriptor_ptr as usize)
+                .ok_or_else(|| format!("failed to get resource_chunks slice [{resource_view_ptr}..{descriptor_ptr}] from len {len}",
+                        len = data.len()))?;
+
+            let mut cur = std::io::Cursor::new(slice);
+
+            let _res_views_len: u32 = cur.read_le()?;
+            let num_res_views: u32 = cur.read_le()?;
+
+            let mut v = vec![];
+
+            for _ in 0..num_res_views {
+                let ptr: u32 = cur.read_le()?;
+                let size: u32 = cur.read_le()?;
+
+                v.push(
+                    slice
+                        .get(ptr as usize..(ptr + size) as usize)
+                        .ok_or("bad slice")?
+                        .to_vec(),
+                );
+            }
+
+            v
+        };
+
+        // TODO: assert resource size against size?
+
+        Ok((
+            demand_header,
+            Self {
+                descriptor_bytes,
+                resource_chunks,
+            },
+        ))
+    }
+
     /// Combines the resource chunks into a single Vec and returns them
     pub fn resource(&self) -> Option<Vec<u8>> {
         (!self.resource_chunks.is_empty())
