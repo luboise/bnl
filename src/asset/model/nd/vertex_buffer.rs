@@ -45,8 +45,8 @@ pub fn get_vertex_positions(
 
 #[expect(clippy::manual_non_exhaustive)]
 #[binrw::binrw]
-#[br(import(mrc: super::ModelReadContext<'_> ))]
-#[bw(import(mwc: super::ModelWriteContext ))]
+#[br(import(mrc: crate::asset::model::ModelReadContext<'_>  ))]
+#[bw(import(mwc: crate::asset::model::ModelWriteContext ))]
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[bw(stream=w)]

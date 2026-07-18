@@ -57,7 +57,7 @@ impl serde::Serialize for VertexBufferResourceView {
 }
 
 impl binrw::BinRead for VertexBufferResourceView {
-    type Args<'a> = crate::asset::model::nd::ModelReadContext<'a>;
+    type Args<'a> = crate::asset::model::ModelReadContext<'a>;
 
     fn read_options<R: std::io::prelude::Read + std::io::prelude::Seek>(
         reader: &mut R,
@@ -113,7 +113,7 @@ impl binrw::BinRead for VertexBufferResourceView {
 }
 
 impl binrw::BinWrite for VertexBufferResourceView {
-    type Args<'a> = crate::asset::model::nd::ModelWriteContext;
+    type Args<'a> = crate::asset::model::ModelWriteContext;
 
     fn write_options<W: std::io::prelude::Write + Seek>(
         &self,
@@ -178,7 +178,7 @@ impl binrw::BinWrite for VertexBufferResourceView {
 impl VertexBufferResourceView {
     pub fn from_reader<R: std::io::Read + std::io::Seek>(
         reader: &mut R,
-        mrc: crate::asset::model::nd::ModelReadContext<'_>,
+        mrc: crate::asset::model::ModelReadContext<'_>,
     ) -> Result<Self, crate::Error> {
         Ok(reader.read_le_args(mrc)?)
     }

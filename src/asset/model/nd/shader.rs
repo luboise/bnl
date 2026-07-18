@@ -167,7 +167,11 @@ pub struct NdShader2Data {
 
 impl NdShader2Data {
     pub fn name_offset(&self) -> i64 {
-        8 + self.pixel_shader.size() as i64
+        8 
+            + self.pixel_shader.size() as i64 
+            + self.pixel_shader_sub.as_ref()
+                .map(|shader|shader.size() as i64)
+                .unwrap_or(0i64)
     }
 }
 

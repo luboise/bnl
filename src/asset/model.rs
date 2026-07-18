@@ -1,21 +1,17 @@
 pub mod nd;
 pub mod sub_colliders;
-pub mod sub_main;
 pub mod subresources;
 
+use binrw::{BinRead, BinReaderExt, BinWriterExt, binrw};
+use byteorder::{LittleEndian, ReadBytesExt};
+use std::io::{Read, Seek, SeekFrom, Write};
 use strum::IntoEnumIterator;
 pub use subresources::ModelSubresType;
 
 use subresources::*;
 
-use std::io::{Cursor, Seek, SeekFrom, Write};
-
-use binrw::{BinRead, BinReaderExt, BinWriterExt, binrw};
-
 use crate::asset::{
-    AssetData, AssetType,
-    model::{sub_colliders::CollisionSubresource, sub_main::ModelSubresource},
-    texture::Texture,
+    AssetData, AssetType, model::sub_colliders::CollisionSubresource, texture::Texture,
 };
 
 #[binrw]
@@ -137,14 +133,14 @@ impl TryFrom<crate::RawAssetData> for Model {
             flags,
             unknown_u32_1,
             unknown_u32_2,
-        } = RawModelDescriptor::read_le(&mut Cursor::new(&descriptor_bytes))?;
+        } = RawModelDescriptor::read_le(&mut std::io::Cursor::new(&descriptor_bytes))?;
 
         let footer_offsets = footer_entries
             .iter()
             .filter_map(|entry| (entry.subres_type != ModelSubresType::Flags).then_some(entry.ptr))
             .collect::<Vec<_>>();
 
-        let mrc = nd::ModelReadContext {
+        let mrc = ModelReadContext {
             properties: &Default::default(),
             resource: resource.as_slice(),
         };
@@ -244,7 +240,7 @@ impl TryFrom<crate::RawAssetData> for Model {
                     model.subresource0x5 = Some(subresource_bytes.to_owned());
                 }
                 ModelSubresType::Collision => {
-                    let mut cur = Cursor::new(&descriptor_bytes);
+                    let mut cur = std::io::Cursor::new(&descriptor_bytes);
                     cur.seek(SeekFrom::Start(ptr as u64))?;
 
                     let collision_subresource = cur.read_le()?;
@@ -366,7 +362,7 @@ impl TryFrom<Model> for crate::RawAssetData {
 
         footer_entries.push((ModelSubresType::Mesh, writer.stream_position()? as u32));
 
-        let mwc = nd::new_write_context();
+        let mwc = new_write_context();
 
         mwc.borrow_mut().properties = model_subresource.properties.clone();
 
@@ -381,7 +377,7 @@ impl TryFrom<Model> for crate::RawAssetData {
             }
         }
 
-        let nd::ModelWriteContextInner {
+        let ModelWriteContextInner {
             nd_heirarchy_ptrs,
             mut resource,
             rigid_entries,
@@ -498,6 +494,438 @@ impl Model {
             .as_ref()
             .map(|subres| &subres.textures)
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelSubresource {
+    pub unknown1: u32,
+    pub unknown2: u32,
+    // nodes_ptr: u32,
+    // num_nodes: u32,
+
+    // key_values_ptr: u32,
+    // map2_ptr: u32,
+    pub floats: [f32; 4],
+    pub next_ptr: u32,
+    pub model_model_root: u32,
+    pub nodes: Vec<nd::Nd>,
+    pub properties: ModelProperties,
+}
+
+impl ModelSubresource {
+    #[deprecated(note = "use BinReaderExt::read_le_args(ModelReadContext)")]
+    pub fn from_bytes(
+        bytes: &[u8],
+        resource: &[u8],
+        _resource_base: u32,
+    ) -> Result<Self, crate::Error> {
+        Ok(std::io::Cursor::new(bytes).read_le_args(ModelReadContext {
+            properties: &Default::default(),
+            resource,
+        })?)
+    }
+
+    #[deprecated(note = "use ModelSubresource.nodes")]
+    pub fn primitives(&self) -> &[nd::Nd] {
+        &self.nodes
+    }
+}
+
+impl binrw::BinRead for ModelSubresource {
+    type Args<'a> = ModelReadContext<'a>;
+
+    fn read_options<R: std::io::Read + Seek>(
+        reader: &mut R,
+        _endian: binrw::Endian,
+        mrc: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<Self> {
+        let ModelReadContext {
+            properties: _,
+            resource,
+        } = mrc;
+
+        // FIXME: make this more efficient
+        let mut reader = {
+            // Model subres starts with 0x40, which points to 0x20 inside of the resource
+            // => Skip 0x20 in and set that as zero
+            let begin_ptr = reader.read_u32::<LittleEndian>()?;
+            reader.seek(SeekFrom::Start(begin_ptr.into()))?;
+            std::io::Cursor::new(reader.bytes().collect::<Result<Vec<_>, _>>()?)
+        };
+
+        let unknown1 = reader.read_u32::<LittleEndian>()?;
+        let unknown2 = reader.read_u32::<LittleEndian>()?;
+        let primitive_ptrs_start = reader.read_u32::<LittleEndian>()?;
+        let primitive_count = reader.read_u32::<LittleEndian>()?;
+        let properties_ptr = reader.read_u32::<LittleEndian>()?;
+        let properties: ModelProperties = {
+            if properties_ptr == 0 {
+                Default::default()
+            } else {
+                let mut reader = reader.clone();
+                reader.seek(SeekFrom::Start(properties_ptr.into()))?;
+                reader
+                    .read_le::<ModelProperties>()?
+                    .try_into()
+                    .map_err(|e| binrw::Error::Custom {
+                        pos: reader.stream_position().unwrap_or_default(),
+                        err: Box::new(format!(
+                            "unable to convert model_properties to hashmap: {e}"
+                        )),
+                    })?
+            }
+        };
+
+        let map2_ptr = reader.read_u32::<LittleEndian>()?;
+        if map2_ptr != 0 {
+            return Err(binrw::Error::AssertFail {
+                pos: reader.stream_position().unwrap_or(0),
+                message: "map2_ptr is not 0".to_owned(),
+            });
+        }
+
+        let floats = reader.read_le()?;
+        let next_ptr = reader.read_le()?;
+        let model_model_root = reader.read_le()?;
+
+        let stream_end_position = reader.stream_position()?;
+
+        let primitive_ptrs: Vec<u32> = {
+            let mut reader = reader.clone();
+            reader.seek(SeekFrom::Start(primitive_ptrs_start as u64))?;
+
+            (0..primitive_count as usize)
+                .map(|_| reader.read_u32::<LittleEndian>())
+                .collect::<Result<_, _>>()?
+        };
+
+        let mrc = ModelReadContext::new(&properties, resource);
+
+        let mut nodes = vec![];
+        for primitive_ptr in primitive_ptrs {
+            let mut reader = reader.clone();
+            reader.seek(SeekFrom::Start(primitive_ptr.into()))?;
+            let nd: nd::Nd = reader.read_le_args((mrc,))?;
+            nodes.push(nd);
+        }
+
+        reader.seek(SeekFrom::Start(stream_end_position))?;
+
+        Ok(Self {
+            unknown1,
+            unknown2,
+            floats,
+            next_ptr,
+            model_model_root,
+            nodes,
+            properties,
+        })
+    }
+}
+
+impl binrw::BinWrite for ModelSubresource {
+    type Args<'a> = ModelWriteContext;
+
+    fn write_options<W: std::io::prelude::Write + Seek>(
+        &self,
+        writer: &mut W,
+        _endian: binrw::Endian,
+        mwc: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        let base = u32::try_from(writer.stream_position()?).map_err(nd::br_error(writer))?;
+
+        let subres = {
+            let mut subres = vec![];
+            let mut cur = std::io::Cursor::new(&mut subres);
+
+            let ModelSubresource {
+                unknown1,
+                unknown2,
+                floats,
+                next_ptr,
+                model_model_root,
+                nodes,
+                properties: _,
+            } = self;
+
+            cur.write_le(&unknown1)?;
+            cur.write_le(&unknown2)?;
+            // nodes ptr
+            cur.write_le(&0x30u32)?;
+            cur.write_le(&(self.nodes.len() as u32))?;
+            // properties_ptr
+            cur.write_le(&0u32)?;
+            // map2
+            cur.write_le(&0u32)?;
+
+            cur.write_le(&floats)?;
+            cur.write_le(&next_ptr)?;
+            cur.write_le(&model_model_root)?;
+
+            {
+                let ptrs_start = cur.stream_position()? as u32;
+                let mut nd_ptr = ptrs_start + 4 * nodes.len() as u32;
+
+                for node in nodes {
+                    nd_ptr = {
+                        cur.write_le(&nd_ptr)?;
+                        let restore = cur.stream_position()?;
+                        cur.seek(SeekFrom::Start(nd_ptr.into()))?;
+                        cur.write_le_args(node, mwc.clone())?;
+                        let write_end = cur.stream_position()?;
+                        cur.seek(SeekFrom::Start(restore))?;
+                        write_end as u32
+                    };
+                }
+
+                // Skip to after the nodes after writing them
+                cur.seek(SeekFrom::Start(nd_ptr.into()))?;
+            }
+
+            for (nd_offset, indices) in std::mem::take(&mut mwc.borrow_mut().rigid_entries) {
+                let ptr = cur.stream_position()? as u32;
+
+                cur.seek(SeekFrom::Start(nd_offset))?;
+                cur.write_le(&ptr)?;
+                cur.seek(SeekFrom::Start(ptr.into()))?;
+                cur.write_all(&indices)?;
+            }
+
+            let properties = &mwc.borrow().properties;
+
+            if !properties.is_empty() {
+                let properties_pos = cur.stream_position()?;
+                cur.write_le(&ModelProperties::from(properties.clone()))?;
+
+                let restore = cur.stream_position()?;
+
+                // update the properties pos
+                cur.seek(SeekFrom::Start(0x10))?;
+                cur.write_le(&(properties_pos as u32))?;
+
+                cur.seek(SeekFrom::Start(restore))?;
+            }
+
+            subres
+        };
+
+        let subres = (base + 0x20)
+            .to_le_bytes()
+            .into_iter()
+            .chain([0u8; 32 - 4])
+            .chain(subres)
+            .collect::<Vec<_>>();
+
+        writer.write_all(&subres)?;
+
+        // pad to 16
+        while writer.stream_position()? % 16 != 0 {
+            writer.write_le(&0u8)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ModelReadContext<'a> {
+    pub properties: &'a ModelProperties,
+    pub resource: &'a [u8],
+}
+
+impl<'a> ModelReadContext<'a> {
+    pub fn new(properties: &'a ModelProperties, resource: &'a [u8]) -> Self {
+        Self {
+            properties,
+            resource,
+        }
+    }
+
+    pub fn get_bone_name(&self, bone_index: u32) -> Option<String> {
+        self.properties.iter().find_map(|property| {
+            let ModelProperty { key, value } = property;
+
+            let key = key.to_string();
+
+            if !is_bone_name(&key) || property.value.len() != 4 {
+                return None;
+            }
+
+            if !u32::from_le_bytes(value.as_slice().try_into().unwrap()) == bone_index {
+                return None;
+            }
+
+            Some(key)
+        })
+    }
+}
+
+pub type ModelWriteContext = std::rc::Rc<std::cell::RefCell<ModelWriteContextInner>>;
+
+pub fn new_write_context() -> ModelWriteContext {
+    ModelWriteContext::new(
+        ModelWriteContextInner {
+            nd_heirarchy_ptrs: vec![],
+            resource: vec![],
+            rigid_entries: vec![],
+            properties: Default::default(),
+            property_counts: Default::default(),
+            in_blend_shape: false,
+        }
+        .into(),
+    )
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelWriteContextInner {
+    pub nd_heirarchy_ptrs: Vec<u32>,
+    pub resource: Vec<u8>,
+    pub rigid_entries: Vec<(u64, Vec<u8>)>,
+    pub properties: ModelProperties,
+
+    /// Tracks how many times a property has come up in the properties
+    /// Used for shader properties which appear more than once
+    pub property_counts: std::collections::HashMap<String, usize>,
+    pub in_blend_shape: bool,
+}
+
+pub fn is_bone_name<S: AsRef<str>>(s: S) -> bool {
+    let s = s.as_ref();
+    s.to_lowercase().starts_with("joint") || ["BASE", "MID"].contains(&s)
+}
+
+#[binrw::binread]
+#[br(little, stream = r)]
+#[derive(Clone, Debug, Default)]
+pub struct ModelProperties {
+    #[br(temp)]
+    num_key_values: u32,
+    #[br(temp, assert(r.stream_position().is_ok_and(|v| v == u64::from(key_values_ptr))))]
+    key_values_ptr: u32,
+    #[br(count = num_key_values)]
+    pub properties: Vec<ModelProperty>,
+}
+
+impl ModelProperties {
+    pub fn get(&self, key: &str) -> Option<&[u8]> {
+        self.properties
+            .iter()
+            .find(|property| property.key.0.as_slice() == key.as_bytes())
+            .map(|property| property.value.as_slice())
+    }
+
+    pub fn get_all(&mut self, key: &str) -> Vec<&mut [u8]> {
+        self.properties
+            .iter_mut()
+            .filter(|property| property.key.to_string() == key)
+            .map(|property| property.value.as_mut_slice())
+            .collect()
+    }
+
+    pub fn get_property(&self, index: usize) -> Option<&ModelProperty> {
+        self.properties.get(index)
+    }
+
+    pub fn get_keys_from_u32(&self, value: u32) -> Vec<String> {
+        self.properties
+            .iter()
+            .filter_map(|property| {
+                (property.value.len() == 4
+                    && value == u32::from_le_bytes(property.value.as_slice().try_into().unwrap()))
+                .then(|| property.key.to_string())
+            })
+            .collect()
+    }
+
+    pub fn len(&self) -> usize {
+        self.properties.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &ModelProperty> {
+        self.properties.iter()
+    }
+}
+
+impl IntoIterator for ModelProperties {
+    type Item = ModelProperty;
+
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.properties.into_iter()
+    }
+}
+
+impl binrw::BinWrite for ModelProperties {
+    type Args<'a> = ();
+
+    fn write_options<W: std::io::prelude::Write + Seek>(
+        &self,
+        writer: &mut W,
+        _: binrw::Endian,
+        _: Self::Args<'_>,
+    ) -> binrw::prelude::BinResult<()> {
+        writer.write_le(&(self.properties.len() as u32))?;
+
+        if self.properties.is_empty() {
+            writer.write_le(&0u32)?;
+            return Ok(());
+        } else {
+            let entries_start = (writer.stream_position()? + 0x4) as u32;
+            writer.write_le(&entries_start)?;
+        }
+
+        let mut data_bytes = vec![];
+
+        let mut data_ptr = (self.properties.len() as u64 * 12 + writer.stream_position()?) as u32;
+        for entry in &self.properties {
+            let key_buf = {
+                let mut buf = entry.key.0.clone();
+                if buf.last() != Some(&0) {
+                    buf.push(0);
+                }
+                while buf.len() % 4 != 0 {
+                    buf.push(0xFD);
+                }
+                buf
+            };
+
+            // key_ptr
+            writer.write_le(&data_ptr)?;
+            data_ptr += key_buf.len() as u32;
+            data_bytes.extend(key_buf);
+
+            // value_ptr
+            writer.write_le(&data_ptr)?;
+            data_ptr += entry.value.len() as u32;
+            data_bytes.extend_from_slice(&entry.value);
+
+            // value_size
+            writer.write_le(&(entry.value.len() as u32))?;
+        }
+
+        writer.write_le(&data_bytes)?;
+
+        Ok(())
+    }
+}
+
+#[binrw::binread]
+#[br(little)]
+#[derive(Clone, Debug, Default)]
+pub struct ModelProperty {
+    #[br(parse_with = binrw::FilePtr32::parse)]
+    pub key: binrw::NullString,
+    #[br(temp)]
+    value_ptr: u32,
+    #[br(temp)]
+    value_size: u32,
+    #[br(restore_position, count = value_size, seek_before = SeekFrom::Start(value_ptr as u64))]
+    pub value: Vec<u8>,
 }
 
 #[cfg(test)]

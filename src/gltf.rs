@@ -1,6 +1,7 @@
 use binrw::BinWriterExt;
-use gltf_writer::GltfIndex;
 use image::EncodableLayout;
+
+pub use gltf_writer::*;
 
 use crate::asset::{
     AssetParseError,
@@ -290,9 +291,20 @@ impl NdGltfAdd for Nd {
 
                     Ok(None)
                 }
+                NdData::BlendShape(blend_shape) => {
+                    /*
+                    let blend_node = ctx.gltf.add_node(gltf_writer::Node::new(Some("Blend Shape".to_owned())));
+                    // ctx.push_node(blend_node);
+                    for node in &blend_shape.nodes {
+                        node.create_gltf_node(ctx)?;
+                    }
+                    // ctx.pop_node();
+                    Ok(Some(blend_node))
+                    */
+                    Ok(None)
+                }
                 NdData::Shader2(_)
                 | NdData::VertexShader(_)
-                | NdData::BlendShape(_) 
                  => Ok(None),
             }?;
 
@@ -323,18 +335,19 @@ impl NdGltfAdd for Nd {
             return Ok(new_index_opt);
         }
 
-        if self.nd_type() == crate::asset::model::nd::NdType::BlendShape {
+        if self.nd_type == crate::asset::model::nd::NdType::BlendShape {
             return Ok(None);
         }
+
 
         let type_string = self.nd_type().to_string();
 
         let indentation = String::from_utf8(vec![b' '; 4 * ctx.node_stack.len()]).unwrap();
 
+
         // Push node, then handle child, then unpush node
         if let Some(node_index) = &new_index_opt {
             ctx.push_node(*node_index);
-
             println!(
                 "{}Pushing {} {}, onto stack.",
                 &indentation, type_string, node_index
@@ -419,9 +432,8 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
         let bone_names = ctx
             .properties
             .iter()
-            .skip_while(|(k, v)| *k != "BASE")
             .take(self.bones.len())
-            .map(|(k, v)| k)
+            .map(|property| property.key.to_string())
             .collect::<Vec<_>>();
 
         for (i, bone) in self.bones.iter().enumerate() {
@@ -438,7 +450,7 @@ impl NdGltfAdd for crate::asset::model::nd::NdSkeletonData {
 
             let name = bone_names
                 .get(i)
-                .map(|v| String::from(*v))
+                .cloned()
                 .unwrap_or_else(|| {
                     if i == 0 {
                         "BASE".to_owned()

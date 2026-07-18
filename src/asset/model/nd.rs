@@ -55,7 +55,7 @@ fn serialize_vec_len<T, S: serde::Serializer>(v: &[T], s: S) -> Result<S::Ok, S:
 }
 
 #[binrw::binread]
-#[br(stream = r, import(mrc: ModelReadContext<'_>))]
+#[br(stream = r, import(mrc: super::ModelReadContext<'_>))]
 #[brw(little)]
 #[derive(Debug, Clone)]
 pub struct Nd {
@@ -122,7 +122,7 @@ pub(crate) fn br_get_stream_pos(
 }
 
 impl binrw::BinWrite for Nd {
-    type Args<'a> = ModelWriteContext;
+    type Args<'a> = super::ModelWriteContext;
 
     fn write_options<W: std::io::prelude::Write + Seek>(
         &self,
@@ -145,10 +145,8 @@ impl binrw::BinWrite for Nd {
             next_sibling,
         } = &self;
 
-
         // if has name, update the property to current offset
         if let Some(name) = name {
-            let bytes_to_write = u32::try_from(writer.stream_position()?).unwrap().to_le_bytes().to_vec();
             let mut borrowed = mwc.borrow_mut();
             let count = {
                 let borrowed_count = borrowed.property_counts.entry(name.clone()).or_insert(0);
@@ -298,7 +296,7 @@ pub enum NdType {
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[binrw::binread]
-#[br(import(mrc: ModelReadContext<'_>, nd_type: NdType))]
+#[br(import(mrc: super::ModelReadContext<'_>, nd_type: NdType))]
 #[bw(import(mwc: ModelWriteContext))]
 pub enum NdData {
     #[br(pre_assert(nd_type == NdType::Skeleton))]
@@ -332,7 +330,7 @@ pub enum NdData {
 }
 
 impl binrw::BinWrite for NdData {
-    type Args<'a> = ModelWriteContext;
+    type Args<'a> = super::ModelWriteContext;
 
     fn write_options<W: std::io::prelude::Write + Seek>(
         &self,
@@ -623,7 +621,7 @@ pub struct NdRigidSkinIdxData {
 }
 
 impl binrw::BinWrite for NdRigidSkinIdxData {
-    type Args<'a> = ModelWriteContext;
+    type Args<'a> = super::ModelWriteContext;
 
     fn write_options<W: std::io::prelude::Write + Seek>(
         &self,
@@ -664,7 +662,7 @@ impl NdBlendShapeData {
         let mut cur = std::io::Cursor::new(&mut v);
 
 
-        let mwc = new_write_context();
+        let mwc = super::new_write_context();
 
         for node in &self.nodes {
             cur.write_le_args(node, mwc.clone()).unwrap();
@@ -680,7 +678,7 @@ impl NdBlendShapeData {
 }
 
 impl binrw::BinRead for NdBlendShapeData {
-    type Args<'a> = ModelReadContext<'a>;
+    type Args<'a> = super::ModelReadContext<'a>;
 
     fn read_options<R: std::io::Read + Seek>(
         reader: &mut R,
@@ -708,7 +706,7 @@ impl binrw::BinRead for NdBlendShapeData {
 }
 
 impl binrw::BinWrite for NdBlendShapeData {
-    type Args<'a> = ModelWriteContext;
+    type Args<'a> = super::ModelWriteContext;
 
     fn write_options<W: std::io::Write + Seek>(
         &self,

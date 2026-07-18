@@ -61,7 +61,7 @@ pub struct TexturesSubresource {
     pub textures: Vec<crate::asset::texture::Texture>,
 }
 impl binrw::BinRead for TexturesSubresource {
-    type Args<'a> = super::nd::ModelReadContext<'a>;
+    type Args<'a> = super::ModelReadContext<'a>;
 
     fn read_options<R: std::io::prelude::Read + Seek>(
         reader: &mut R,
@@ -116,7 +116,7 @@ impl TexturesSubresource {
     ) -> Result<Self, crate::Error> {
         let mut cur = std::io::Cursor::new(data);
         cur.seek(SeekFrom::Start(descriptor_base.into()))?;
-        Ok(cur.read_le_args(super::nd::ModelReadContext {
+        Ok(cur.read_le_args(super::ModelReadContext {
             properties: &Default::default(),
             resource,
         })?)

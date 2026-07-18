@@ -466,7 +466,7 @@ mod tests {
 
         xwavebank.write_le(&mut std::io::Cursor::new(&mut serialised))?;
 
-        crate::utils::compare_streams(xwb, &serialised);
+        crate::utils::compare_streams(xwb, &serialised)?;
 
         Ok(())
     }

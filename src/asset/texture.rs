@@ -75,7 +75,7 @@ pub enum TextureError {
 
 #[derive(Clone)]
 #[binrw::binread]
-#[br(import(mrc: super::model::nd::ModelReadContext<'_>))]
+#[br(import(mrc: super::model::ModelReadContext<'_> ))]
 pub struct Texture {
     pub descriptor: TextureDescriptor,
     #[br(count = descriptor.texture_size, map_stream = |_| std::io::Cursor::new(mrc.resource))]

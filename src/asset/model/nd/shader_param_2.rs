@@ -14,7 +14,13 @@ pub struct NdShaderParam2Data {
     #[bw(try_calc = u32::try_from(8 + w.stream_position().unwrap()))]
     payload_ptr: u32,
     #[br(temp, assert(payload_ptr == r.stream_position().unwrap() as u32))]
-    #[bw(calc = 0)]
+    #[bw(try_calc = 
+        if sub_payload.is_some() {
+            u32::try_from(4 + w.stream_position().unwrap() + main_payload.size() as u64)
+        }
+        else {
+            Ok(0)
+        })]
     payload_ptr_2: u32,
     pub main_payload: PixelShaderParams,
     #[br(if(payload_ptr_2 != 0),
@@ -297,7 +303,7 @@ pub struct PixelShaderParams {
 
 impl PixelShaderParams {
     pub fn size(&self) -> i64 {
-        let v =0x48
+        let v = 0x48
             + 4 * self.pixel_shader_constants.len()
             + 4 * 16 * self.matrices.len() + if self.matrices.is_empty()  { 0 } else { 8 }
             + 4 * 7 * self.texture_assignments.len();
