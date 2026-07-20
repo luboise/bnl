@@ -392,7 +392,8 @@ impl BNLFile {
     let bnl = BNLFile::from_bytes(&bytes).expect("Unable to parse BNL.");
     ```
     */
-    pub fn from_bytes(bnl_bytes: &[u8]) -> Result<Self, crate::Error> {
+    pub fn from_bytes(bnl_bytes: impl AsRef<[u8]>) -> Result<Self, crate::Error> {
+        let bnl_bytes = bnl_bytes.as_ref();
         if bnl_bytes.len() < 40 {
             return Err(format!(
                 "Length of BNL file must be at least 40 bytes (received {})",
@@ -482,6 +483,12 @@ impl BNLFile {
         }
 
         Ok(new_bnl)
+    }
+
+    #[inline]
+    pub fn from_path(path: impl AsRef<std::path::Path>) -> Result<Self, crate::Error> {
+        let path = path.as_ref();
+        Self::from_bytes(std::fs::read(path)?)
     }
 
     pub fn to_bytes(&mut self) -> Result<Vec<u8>, crate::Error> {
@@ -643,18 +650,30 @@ impl BNLFile {
     /// ```
     pub fn get_assets<AD: AssetData + TryInto<RawAssetData, Error = crate::Error>>(
         &self,
-    ) -> Vec<Asset<AD>> {
+    ) -> Vec<Asset<AD>>
+    where
+        <AD as TryFrom<RawAssetData>>::Error: std::fmt::Display,
+    {
         let mut assets = Vec::new();
 
         for asset in &self.assets {
-            let asset_desc = &asset.metadata;
+            let metadata = &asset.metadata;
 
-            if asset_desc.asset_type() != AD::asset_type() {
+            if metadata.asset_type() != AD::asset_type() {
                 continue;
             }
 
-            let Ok(transformed) = asset.data.clone().try_into() else {
-                continue;
+            let transformed = match asset.data.clone().try_into() {
+                Ok(v) => v,
+                Err(e) => {
+                    // TODO: display e here
+                    eprintln!(
+                        "failed to get {} {}: {e}",
+                        metadata.name(),
+                        metadata.asset_type
+                    );
+                    continue;
+                }
             };
 
             assets.push(Asset {

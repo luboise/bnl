@@ -1,11 +1,87 @@
 use binrw::BinRead;
-use bnl::xsb::{self};
+use bnl::{
+    asset::Dump,
+    xsb::{self},
+};
 
 fn main() -> Result<(), bnl::Error> {
     let mut args = std::env::args().skip(1);
 
     let game_dir: std::path::PathBuf = args.next().unwrap().into();
-    let out_path: std::path::PathBuf = args.next().unwrap().into();
+    let out_path: std::path::PathBuf = args.next().unwrap_or_else(|| "out".to_owned()).into();
+
+    println!("ripping audio");
+    rip_cues(&game_dir, &out_path)?;
+
+    println!("ripping models");
+    rip_textures(&game_dir, &out_path)?;
+
+    Ok(())
+}
+
+fn rip_textures(
+    game_dir: impl AsRef<std::path::Path>,
+    out_dir: impl AsRef<std::path::Path>,
+) -> Result<(), bnl::Error> {
+    let game_dir = game_dir.as_ref();
+    let out_dir = out_dir.as_ref().join("models");
+
+    let mut found_models = std::collections::HashSet::new();
+
+    for entry in walkdir::WalkDir::new(game_dir) {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.is_file() && path.extension().is_some_and(|v| v == "bnl") {
+            let bnl = bnl::BNLFile::from_path(path)?;
+            let models = bnl.get_assets::<bnl::asset::model::Model>();
+
+            for model in models {
+                let bnl::asset::Asset { metadata, data } = model;
+
+                let model_name = metadata
+                    .name()
+                    .chars()
+                    .skip("aid_model_ghoulies_".len())
+                    .collect::<String>();
+
+                if model_name.is_empty() {
+                    eprintln!("invalid model name: {}", metadata.name());
+                    continue;
+                }
+                if !found_models.insert(model_name.clone()) {
+                    continue;
+                }
+                let Some(textures) = &data.textures_subresource else {
+                    continue;
+                };
+                if textures.textures.is_empty() {
+                    continue;
+                };
+
+                // do the dumping
+                let model_dir = model_name
+                    .split('_')
+                    .fold(out_dir.clone(), |out_dir, b| out_dir.join(b));
+
+                std::fs::create_dir_all(&model_dir)?;
+
+                for (i, texture) in textures.textures.iter().enumerate() {
+                    texture.dump(model_dir.join(format!("texturefile{i:04}.png")))?;
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn rip_cues(
+    game_dir: impl AsRef<std::path::Path>,
+    out_dir: impl AsRef<std::path::Path>,
+) -> Result<(), bnl::Error> {
+    let game_dir = game_dir.as_ref();
+    let out_dir = out_dir.as_ref().join("audio");
 
     let wavebank_hashes = [
         "harddisk0",
@@ -129,7 +205,7 @@ fn main() -> Result<(), bnl::Error> {
                     format!("{}_{}.wav", group.name, cue_name)
                 };
 
-                wav_file.dump(out_path.join(filename))?;
+                wav_file.dump(out_dir.join(filename))?;
             }
         }
     }
