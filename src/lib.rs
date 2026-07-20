@@ -24,6 +24,37 @@ pub mod game;
 pub mod modding;
 pub mod xsb;
 
+pub fn find_asset<T>(
+    dir: impl AsRef<std::path::Path>,
+    name: impl AsRef<str>,
+) -> Result<asset::Asset<T>, crate::Error>
+where
+    T: asset::AssetData + TryFrom<RawAssetData, Error = crate::Error>,
+{
+    let dir = dir.as_ref();
+    let name = name.as_ref();
+
+    for entry in walkdir::WalkDir::new(dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "bnl") {
+            let bnl_bytes = std::fs::read(path)?;
+
+            if !get_aid_list(&bnl_bytes)?.contains(&name.into()) {
+                continue;
+            }
+
+            let bnl = BNLFile::from_bytes(bnl_bytes)?;
+            return bnl.get_asset(name);
+        }
+    }
+
+    Err("not found".into())
+}
+
 #[derive(Debug)]
 pub struct VirtualResource<'a> {
     slices: Vec<&'a [u8]>,

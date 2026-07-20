@@ -1,6 +1,6 @@
 pub mod bitstream;
 
-pub(crate) fn compare_streams(expected: &[u8], received: &[u8]) -> Result<(), crate::Error> {
+pub fn compare_streams(expected: &[u8], received: &[u8]) -> Result<(), crate::Error> {
     for (i, (a, b)) in expected.iter().zip(received.iter()).enumerate() {
         if *a != *b {
             return Err(format!(
