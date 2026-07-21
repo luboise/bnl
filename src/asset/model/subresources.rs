@@ -229,8 +229,45 @@ pub type Subresource0xf = Vec<u8>;
 pub type Subresource0x10 = Vec<u8>;
 pub type Subresource0x11 = Vec<u8>;
 
-// TODO: Actually do this type from imhex
-pub type TilesSubresource = Vec<u8>;
+#[binrw::binrw]
+#[derive(Debug, Clone)]
+pub struct Tile {
+    pub idk1: u32,
+    pub idk2: u32,
+    pub res_size: u32,
+    pub res_ptr: u32,
+
+    pub d3d_vertex_buffer_header: u32,
+    pub idk3: u32,
+    pub idk4: u32,
+}
+
+#[derive(Debug, Clone)]
+#[binrw::binrw]
+pub struct TilesSubresource {
+    pub idka1: u32,
+    pub idka2: u32,
+    pub idk3: u32,
+    pub idk4: u32,
+
+    pub num_x: u32,
+    pub num_y: u32,
+    pub num_z: u32,
+
+    num_tiles: u32,
+
+    pub some_vec3: [f32; 3],
+    pub idk0x2c: u32,
+
+    pub idk0x30: u32,
+    pub idk0x34: u32,
+    pub scale: f32,
+
+    tiles_ptr: u32,
+
+    #[br(count = num_tiles, restore_position, seek_before = SeekFrom::Start(tiles_ptr.into()))]
+    tiles: Vec<Tile>,
+}
 
 pub type Subresource0x13 = Vec<u8>;
 pub type Subresource0x14 = Vec<u8>;

@@ -256,7 +256,9 @@ impl TryFrom<crate::RawAssetData> for Model {
                         Some(std::io::Cursor::new(subresource_bytes).read_le()?);
                 }
                 ModelSubresType::Tiles => {
-                    todo!()
+                    let mut cur = std::io::Cursor::new(&descriptor_bytes);
+                    cur.seek(SeekFrom::Start(ptr.into()))?;
+                    model.tiles_subresource = Some(cur.read_le()?)
                 }
                 ModelSubresType::Unknown0x0c => {
                     todo!()
