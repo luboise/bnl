@@ -5,6 +5,7 @@ use serde::ser::SerializeMap;
 
 #[derive(Debug, Clone)]
 pub struct VertexBufferResourceView {
+    pub stride: u8,
     pub view_type: VertexBufferViewType,
     pub unknown_u16: u16,
 
@@ -26,6 +27,7 @@ impl serde::Serialize for VertexBufferResourceView {
         let mut map = s.serialize_map(None)?;
 
         let Self {
+            stride: _,
             view_type,
             unknown_u16,
             unknown_u32_1,
@@ -67,13 +69,10 @@ impl binrw::BinRead for VertexBufferResourceView {
         let stride: u8 = reader.read_le()?;
         let view_type = reader.read_le::<VertexBufferViewType>()?;
 
-        if stride != view_type.stride() {
+        if !view_type.is_valid_stride(stride) {
             return Err(binrw::Error::AssertFail {
                 pos: reader.stream_position().unwrap_or(0),
-                message: format!(
-                    "serialised stride {stride} does not match expected stride {} for {view_type}",
-                    view_type.stride()
-                ),
+                message: format!("stride {stride} is invalid for {view_type}"),
             });
         }
 
@@ -101,6 +100,7 @@ impl binrw::BinRead for VertexBufferResourceView {
             .collect();
 
         Ok(Self {
+            stride,
             view_type,
             unknown_u16,
             unknown_u32_1,
@@ -122,6 +122,7 @@ impl binrw::BinWrite for VertexBufferResourceView {
         mwc: Self::Args<'_>,
     ) -> binrw::prelude::BinResult<()> {
         let Self {
+            stride,
             view_type,
             unknown_u16,
             unknown_u32_1,
@@ -133,7 +134,12 @@ impl binrw::BinWrite for VertexBufferResourceView {
 
         let mut resource_start = *resource_start;
 
-        let stride = view_type.stride();
+        if !view_type.is_valid_stride(*stride) {
+            return Err(binrw::Error::AssertFail {
+                pos: writer.stream_position().unwrap_or(0),
+                message: format!("invalid stride {stride} for view_type {view_type}"),
+            });
+        }
         writer.write_le(&stride)?;
         writer.write_le(view_type)?;
         writer.write_le(unknown_u16)?;
@@ -193,8 +199,9 @@ impl VertexBufferResourceView {
         self.len() == 0
     }
 
+    #[deprecated(note = "field is public")]
     pub fn stride(&self) -> u8 {
-        self.view_type().stride()
+        self.stride
     }
 
     pub fn start(&self) -> u32 {
@@ -208,9 +215,10 @@ impl VertexBufferResourceView {
     /// Number of entries in this resource view
     /// Equal by length / stride
     pub fn num_entries(&self) -> usize {
-        (self.resource.len() as u32 / u32::from(self.stride() / 4)) as usize
+        (self.resource.len() as u32 / u32::from(self.stride / 4)) as usize
     }
 
+    #[deprecated(note = "field is public")]
     pub fn view_type(&self) -> VertexBufferViewType {
         self.view_type
     }
@@ -260,7 +268,7 @@ pub enum VertexBufferViewType {
 }
 
 impl VertexBufferViewType {
-    pub const fn stride(&self) -> u8 {
+    pub const fn is_valid_stride(&self, stride: u8) -> bool {
         match self {
             VertexBufferViewType::Position
             | VertexBufferViewType::Normal
@@ -271,14 +279,15 @@ impl VertexBufferViewType {
             | VertexBufferViewType::Unknown0x1f
             | VertexBufferViewType::Unknown0x20
             | VertexBufferViewType::Unknown0x21
-            | VertexBufferViewType::Unknown0x22 => 0xc,
-            VertexBufferViewType::Skin
-            | VertexBufferViewType::SkinWeight
-            | VertexBufferViewType::UV
+            | VertexBufferViewType::Unknown0x22 => stride == 0xc,
+            VertexBufferViewType::Skin | VertexBufferViewType::SkinWeight => {
+                stride == 0x4 || stride == 0x8
+            }
+            VertexBufferViewType::UV
             | VertexBufferViewType::Unknown14
             | VertexBufferViewType::Unknown16
-            | VertexBufferViewType::Unknown15 => 0x8,
-            VertexBufferViewType::Unknown12 | VertexBufferViewType::Colour => 0x4,
+            | VertexBufferViewType::Unknown15 => stride == 0x8,
+            VertexBufferViewType::Unknown12 | VertexBufferViewType::Colour => stride == 0x4,
             VertexBufferViewType::KnknownFF => todo!(),
         }
     }

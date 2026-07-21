@@ -310,8 +310,8 @@ pub enum NdData {
     PushBuffer(NdPushBufferData),
     #[br(pre_assert(nd_type == NdType::BGPushBuffer))]
     BGPushBuffer(NdBGPushBufferData),
-    // #[br(pre_assert(nd_type == NdType::Group))]
-    // Group,
+    #[br(pre_assert(nd_type == NdType::Group))]
+    Group,
     #[br(pre_assert(nd_type == NdType::Shader2))]
     Shader2(NdShader2Data),
     #[br(pre_assert(nd_type == NdType::VertexShader))]
@@ -348,7 +348,8 @@ impl binrw::BinWrite for NdData {
             NdData::ShaderParam2(data) => data.write_le(writer)?,
             NdData::MtxArray(data) => data.write_le(writer)?,
             NdData::RigidSkin(data) => data.write_le_args(writer, mwc)?,
-            NdData::BlendShape(data) => data.write_le_args(writer, mwc)?,            // NdData::Group => data.write_le(writer)?,
+            NdData::BlendShape(data) => data.write_le_args(writer, mwc)?,
+            NdData::Group => writer.write_le(b"ndGroup\x00")?
         }
 
         Ok(())
@@ -368,7 +369,8 @@ impl NdData {
             NdData::ShaderParam2(_) => NdType::ShaderParam2,
             NdData::MtxArray(_) => NdType::MtxArray,
             NdData::RigidSkin(_) => NdType::RigidSkinIdx,
-            NdData::BlendShape(_) => NdType::BlendShape
+            NdData::BlendShape(_) => NdType::BlendShape,
+            NdData::Group => NdType::Group
         }
     }
 
@@ -386,7 +388,9 @@ impl NdData {
             NdData::ShaderParam2(data) => data.name_offset(),
             NdData::MtxArray(data) => data.name_offset(),
             NdData::RigidSkin(..) => 8,
-            NdData::BlendShape(data) => data.name_offset()
+            NdData::BlendShape(data) => data.name_offset(),
+            // ndGroup has no data, only children
+            NdData::Group => 0
         }
     }
 }
@@ -560,8 +564,16 @@ pub struct NdMtxArrayData {
     num_entries: u32,
     pub count2: u16,
     pub calc1: u16, // calculated at runtime
-    pub some_float: f32,
-    pub some_u32: u32,
+    #[br(temp)]
+    #[bw(
+        if(!matrices.is_empty()),
+        try_calc = w.stream_position().ok()
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or("failed to convert").map(|v| v + 8 + num_entries * 8))]
+    pub matrices_ptr: u32,
+    #[br(temp)]
+    #[bw(try_calc = matrices.len().try_into())]
+    pub num_matrices: u32,
 
     // Fake fields
     #[br(if(num_entries > 0 && entries_ptr > 0),
@@ -569,6 +581,11 @@ pub struct NdMtxArrayData {
         seek_before = SeekFrom::Start(entries_ptr.into())
         )]
     pub entries: Vec<NdMtxArrayEntry>,
+    #[br(if(num_matrices > 0 && matrices_ptr > 0),
+        count = num_matrices,
+        seek_before = SeekFrom::Start(matrices_ptr.into())
+        )]
+    pub matrices: Vec<[[f32; 4]; 4]>,
     #[brw(magic = b"ndMtxArray\x00\x00")]
     _magic: (),
 }

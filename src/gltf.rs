@@ -306,6 +306,7 @@ impl NdGltfAdd for Nd {
                 NdData::Shader2(_)
                 | NdData::VertexShader(_)
                  => Ok(None),
+                NdData::Group => todo!(),
             }?;
 
             if let Some(name) = &self.name
