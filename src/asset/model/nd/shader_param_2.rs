@@ -204,7 +204,7 @@ impl binrw::BinWrite for ParamAssignments {
 }
 
 
-#[binrw::binrw]
+#[wezat::wz]
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct PixelShaderMatrix {
     #[serde(skip)]
@@ -213,37 +213,14 @@ pub struct PixelShaderMatrix {
     val2: u32,
 }
 
-#[binrw::binrw]
-#[bw(stream = w)]
+#[wezat::wz]
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PixelShaderParams {
-    #[br(temp)]
-    #[bw(try_calc = if pixel_shader_constants.is_empty() {Ok(0)} else {
-            br_get_stream_pos(w, 0).map(|v| v + 0x48)
-        })]
-    pixel_shader_constants_ptr: u32,
-    #[br(temp)]
-    #[bw(try_calc = if matrices.is_empty() {Ok(0)} else {
-            br_get_stream_pos(w, 4).map(|v| v + 0x48 
-                + u32::try_from(pixel_shader_constants.len()).unwrap() * 4)
-        })]
-    matrices_ptr: u32,
-    #[br(temp)]
-    #[bw(try_calc = if texture_assignments.is_empty() {Ok(0)} else {
-            br_get_stream_pos(w, 8)
-                .map(|v| (v as usize + 0x48
-                + 4 * pixel_shader_constants.len()
-                + 4 * 16 * matrices.len() + if matrices.is_empty() {0} else {8}) 
-                as u32)})]
-    texture_assignments_ptr: u32,
-    #[br(temp)]
-    #[bw(try_calc = texture_assignments.len().try_into())]
+    pixel_shader_constants_ptr: &pixel_shader_constants,
+    matrices_ptr: &matrices,
+    texture_assignments_ptr: &texture_assignments,
     num_texture_assignments: u32,
-    #[br(temp)]
-    #[bw(try_calc = matrices.len().try_into())]
     num_matrices: u32,
-    #[br(temp)]
-    #[bw(try_calc = pixel_shader_constants.len().try_into())]
     num_pixel_shader_constants: u32,
 
     alpha_ref: u8, // Index to the alpha reference texture???
@@ -254,52 +231,25 @@ pub struct PixelShaderParams {
     unknown_1: u32,
 
     // 0x20
-    #[br(assert(next_payload_ptr == 0))]
-    #[bw(calc = 0)]
     next_payload_ptr: u32, // Pointer to next payload???
 
-    #[br(temp)]
-    #[bw(
-        // if(param_assignments.len() > 0),
-        try_calc = if param_assignments.is_empty() {Ok(0)} else {
-            br_get_stream_pos(w, 0x24)
-                .map(|v| (v as usize + 0x48
-                + 4 * pixel_shader_constants.len()
-                + 4 * 16 * matrices.len() + if matrices.is_empty() {0} else {8}
-                + 4 * 7 * texture_assignments.len()
-                ) 
-                as u32)})]
-    param_assignments_ptr: u32,
-    #[br(temp)]
-    #[bw(try_calc = param_assignments.len().try_into())]
+    param_assignments_ptr: &param_assignments,
     num_param_assignments: u32,
 
- pub    idk1: u32,
+    pub idk1: u32,
     pub idk2: u32,
- pub    idk3: u32,
+    pub  idk3: u32,
      pub idk4: u32,
      pub idk5: u32,
 
      pub weird_tex_index: u32,
      pub idk6: u32,
 
-    #[br(if(pixel_shader_constants_ptr != 0),
-        count = num_pixel_shader_constants)]
-    pub pixel_shader_constants: Vec<[u8; 4]>,
-
-    #[br(if(matrices_ptr != 0),
-        count = num_matrices)]
-    pub matrices: Vec<PixelShaderMatrix>,
-
-    #[br(if(texture_assignments_ptr != 0 && num_texture_assignments > 0),
-        count = num_texture_assignments)]
-    pub texture_assignments: Vec<TextureAssignment>,
-
-    #[br(if(num_param_assignments > 0 && param_assignments_ptr > 0),
-        args_raw(num_param_assignments))]
+    pub pixel_shader_constants: [[u8; 4]; num_pixel_shader_constants],
+    pub matrices: [PixelShaderMatrix; num_matrices],
+    pub texture_assignments: [TextureAssignment; num_texture_assignments],
     pub param_assignments: ParamAssignments,
 }
-
 
 impl PixelShaderParams {
     pub fn size(&self) -> i64 {
@@ -376,4 +326,38 @@ pub struct TextureAssignment {
     */
 }
 
+// TODO: Move this into wezat as a unit struct derive instead
+impl wezat::Wezat for TextureAssignment {
+    const MIN_SIZE: usize = 0;
 
+    fn from_bytes(reader: &mut impl wezat::Reader) -> Result<Self, wezat::Error> {
+        let texture_index = wezat::read::<u32>(reader)?.into();
+        let count_1 = wezat::read(reader)?;
+        let count_2 = wezat::read(reader)?;
+        let count_3 = wezat::read(reader)?;
+        let skip_diffuse_texture = wezat::read(reader)?;
+        let unknown_1 = wezat::read(reader)?;
+        let unknown_2 = wezat::read(reader)?;
+        let unknown_3 = wezat::read(reader)?;
+        let unknown_4 = wezat::read(reader)?;
+        let unknown_5 = wezat::read(reader)?;
+
+        Ok(Self{ texture_index, count_1, count_2, count_3, skip_diffuse_texture, unknown_1, unknown_2, unknown_3, unknown_4, unknown_5 })
+    }
+
+    fn write_bytes(&self, writer: &mut impl wezat::Writer) -> Result<(), wezat::Error> {
+        let Self{ texture_index, count_1, count_2, count_3, skip_diffuse_texture, unknown_1, unknown_2, unknown_3, unknown_4, unknown_5 } = self;
+        u32::from(*texture_index).write_bytes(writer)?;
+        count_1.write_bytes(writer)?;
+        count_2.write_bytes(writer)?;
+        count_3.write_bytes(writer)?;
+        skip_diffuse_texture.write_bytes(writer)?;
+        unknown_1.write_bytes(writer)?;
+        unknown_2.write_bytes(writer)?;
+        unknown_3.write_bytes(writer)?;
+        unknown_4.write_bytes(writer)?;
+        unknown_5.write_bytes(writer)?;
+
+        Ok(())
+    }
+}

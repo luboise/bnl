@@ -36,6 +36,7 @@ image = "0.25.10"
 dioxus = { version = "0.7", optional = true, features = ["desktop"] }
 rfd = "0.17.2"
 xbpatch-core = { git = "https://github.com/luboise/xbpatch", version = "0.1.0" }
+wezat = { version = "0.1.0", path = "../wezat", features = ["binrw"] }
 
 [lib]
 name = "bnl"

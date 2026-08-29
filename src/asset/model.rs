@@ -334,18 +334,18 @@ impl TryFrom<Model> for crate::RawAssetData {
             textures_subresource,
             subresource0x8,
             subresource0x9,
-            transforms_subresource,
+            transforms_subresource: _,
             subresource0xb,
             subresource0xc,
-            subresource0xd,
-            subresource0xe,
-            subresource0xf,
+            subresource0xd: _,
+            subresource0xe: _,
+            subresource0xf: _,
             subresource0x10,
-            subresource0x11,
-            tiles_subresource,
-            subresource0x13,
-            subresource0x14,
-            subresource0x15,
+            subresource0x11: _,
+            tiles_subresource: _,
+            subresource0x13: _,
+            subresource0x14: _,
+            subresource0x15: _,
         } = model;
 
         let mut writer = std::io::Cursor::new(&mut descriptor_bytes);
@@ -566,15 +566,7 @@ impl binrw::BinRead for ModelSubresource {
             } else {
                 let mut reader = reader.clone();
                 reader.seek(SeekFrom::Start(properties_ptr.into()))?;
-                reader
-                    .read_le::<ModelProperties>()?
-                    .try_into()
-                    .map_err(|e| binrw::Error::Custom {
-                        pos: reader.stream_position().unwrap_or_default(),
-                        err: Box::new(format!(
-                            "unable to convert model_properties to hashmap: {e}"
-                        )),
-                    })?
+                reader.read_le::<ModelProperties>()?
             }
         };
 
@@ -697,7 +689,7 @@ impl binrw::BinWrite for ModelSubresource {
 
             if !properties.is_empty() {
                 let properties_pos = cur.stream_position()?;
-                cur.write_le(&ModelProperties::from(properties.clone()))?;
+                cur.write_le(&properties)?;
 
                 let restore = cur.stream_position()?;
 
@@ -831,11 +823,11 @@ impl ModelProperties {
     pub fn get_keys_from_u32(&self, value: u32) -> Vec<String> {
         self.properties
             .iter()
-            .filter_map(|property| {
-                (property.value.len() == 4
-                    && value == u32::from_le_bytes(property.value.as_slice().try_into().unwrap()))
-                .then(|| property.key.to_string())
+            .filter(|&property| {
+                property.value.len() == 4
+                    && value == u32::from_le_bytes(property.value.as_slice().try_into().unwrap())
             })
+            .map(|property| property.key.to_string())
             .collect()
     }
 
