@@ -723,6 +723,8 @@ impl AssetLike for Anim {
         let keyframes = descriptor
             .keyframe_bytes
             .chunks_exact(descriptor.keyframe_size as usize)
+            // Data after the keyframes belongs to other sections (c_vals, some_ptr_2, tail data)
+            .take(descriptor.num_keyframes as usize)
             .map(|chunk| AnimKeyframe::new(descriptor, chunk))
             .collect::<Result<Vec<_>, _>>()?;
 

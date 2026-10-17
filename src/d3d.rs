@@ -227,6 +227,7 @@ pub enum D3DFormat {
     DXT2_3 = 0x0e,
     DXT4_5 = 0x0F,
     ARGB8 = 0x12,
+    XRGB8 = 0x1e,
     RGBA8 = 0x3c,
 }
 
@@ -239,6 +240,7 @@ impl TryFrom<u32> for D3DFormat {
             0x0e => Ok(Self::DXT2_3),
             0x0f => Ok(Self::DXT4_5),
             0x12 => Ok(Self::ARGB8),
+            0x1e => Ok(Self::XRGB8),
             0x3c => Ok(Self::RGBA8),
             _ => Err("unrecognised D3DFormat"),
         }
@@ -251,7 +253,7 @@ impl PixelBits for D3DFormat {
             D3DFormat::DXT1 => 4,
             D3DFormat::DXT2_3 => 8,
             D3DFormat::DXT4_5 => 8,
-            D3DFormat::ARGB8 | D3DFormat::RGBA8 => 32,
+            D3DFormat::ARGB8 | D3DFormat::XRGB8 | D3DFormat::RGBA8 => 32,
         }
     }
 }
