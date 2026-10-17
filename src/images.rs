@@ -34,6 +34,7 @@ pub fn transcode(
             D3DFormat::DXT1 | D3DFormat::DXT2_3 | D3DFormat::DXT4_5 => {
                 Err("unable to convert from DXT to DXT".into())
             }
+            D3DFormat::XRGB8 => Err("conversion to XRGB8 not implemented".into()),
         },
         D3DFormat::RGBA8 | D3DFormat::ARGB8 => match dst_format {
             D3DFormat::DXT1 | D3DFormat::DXT2_3 | D3DFormat::DXT4_5 => {
@@ -106,26 +107,38 @@ pub fn transcode(
 
                 Ok(out_bytes)
             }
+            // D3DFMT_(LIN_)A8R8G8B8 is a little-endian 0xAARRGGBB dword, i.e. B,G,R,A in memory.
             D3DFormat::ARGB8 => {
                 // RGBA8 -> ARGB8
                 Ok(bytes
                     .chunks_exact(4)
                     .flat_map(|chunk| {
                         let (r, g, b, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
-                        [a, r, g, b]
+                        [b, g, r, a]
                     })
                     .collect::<Vec<_>>())
             }
             D3DFormat::RGBA8 => {
-                // ARGB8 -> RGBA8
+                // ARGB8 -> RGBA8 (linear textures may carry trailing pitch padding)
                 Ok(bytes
                     .chunks_exact(4)
+                    .take(width * height)
                     .flat_map(|chunk| {
-                        let (a, r, g, b) = (chunk[0], chunk[1], chunk[2], chunk[3]);
+                        let (b, g, r, a) = (chunk[0], chunk[1], chunk[2], chunk[3]);
                         [r, g, b, a]
                     })
                     .collect::<Vec<_>>())
             }
+            D3DFormat::XRGB8 => Err("conversion to XRGB8 not implemented".into()),
+        },
+        // D3DFMT_LIN_X8R8G8B8: B,G,R,X in memory; X is unused, so the result is opaque.
+        D3DFormat::XRGB8 => match dst_format {
+            D3DFormat::RGBA8 => Ok(bytes
+                .chunks_exact(4)
+                .take(width * height)
+                .flat_map(|chunk| [chunk[2], chunk[1], chunk[0], 0xFF])
+                .collect::<Vec<_>>()),
+            _ => Err("XRGB8 can only be converted to RGBA8".into()),
         },
     }
 }
